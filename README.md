@@ -22,11 +22,12 @@ your approval — even when you've stepped away from the editor.
 - **Ask** — the agent asks you `confirm` / `select` / `input` questions via push and waits for
   your answer from the lock screen.
 - **Gate** — risky shell commands (`rm`, force-push, history rewrites, DB drops, deploys,
-  `systemctl`, …) are intercepted by a `beforeShellExecution` hook and sent to your phone for
-  approval **before they run**. Approve → it runs. Deny → it's blocked. If Pushary is
-  unreachable it falls back to Cursor's own in-editor prompt, so it never silently runs a risky
-  command. The hook is **fail-closed**: if the gate can't run at all, the command is blocked
-  rather than allowed unapproved.
+  `systemctl`, …) are intercepted by a `beforeShellExecution` hook and evaluated against your
+  Pushary policy **before they run**. What happens follows your dashboard policy — auto-approve
+  trusted commands, push to your phone for approval, or notify-only — shared across all your
+  agents, and it respects the dashboard **kill switch**. If Pushary is unreachable it falls back
+  to Cursor's own in-editor prompt, so it never silently runs a risky command. The hook is
+  **fail-closed**: if the gate can't run at all, the command is blocked rather than allowed unapproved.
 
 ## Install
 
@@ -84,11 +85,16 @@ can reach you.
 | Hook | `hooks/hooks.json` + `scripts/pushary-gate.mjs` | Routes risky commands to a phone approval |
 | Commands | `commands/` | `/pushary-test`, `/notify-when-done` |
 
-### Tuning the gate
+### How the gate decides
 
-Which commands get gated is the `matcher` regex in `hooks/hooks.json`. Edit it to widen or
-narrow the set — the script makes the final allow/deny/ask decision on whatever the matcher
-lets through.
+Two layers:
+
+- **Matcher** (`hooks/hooks.json`) — a regex that decides which commands are *evaluated* at all.
+  Edit it to widen or narrow the set.
+- **Policy** (your Pushary dashboard) — decides what *happens* to a matched command, per tool:
+  auto-approve, the approval mode (push-and-wait, push-then-prompt, notify-only, prompt-only),
+  the timeout action, a live mode override, and the kill switch. This is the same policy your
+  other Pushary agents use, so behavior stays consistent across agents.
 
 ## Commands
 

@@ -16,10 +16,14 @@ in `hooks/hooks.json`. For a matched command it sends, over HTTPS to Pushary:
 
 - the command text,
 - the basename of the working directory (e.g. `my-repo`, not the full path),
-- an agent label (`Cursor - <project>`).
+- an agent label (`Cursor - <project>`),
+- the Cursor conversation id, so the dashboard kill switch and per-session mode can target this session,
+- a machine id — the first 8 hex characters of a SHA-256 of your hostname (never the hostname itself).
 
-It contacts no host other than `pushary.com`, has no third-party dependencies, and stores
-nothing on disk. The full source is in this repository — read it before installing.
+It also fetches your permission policy and mode from `pushary.com` (the policy is cached in the
+system temp directory for 5 minutes). It contacts no host other than `pushary.com`, has no
+third-party dependencies, and writes only that policy cache to disk. The full source is in this
+repository — read it before installing.
 
 ## Fail-closed by design
 
