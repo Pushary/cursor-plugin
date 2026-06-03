@@ -2,49 +2,45 @@
   <img src="assets/logo.png" alt="Pushary" width="72" height="72" />
 </p>
 
-<h1 align="center">Pushary — Control Panel for AI Agents</h1>
+<h1 align="center">Pushary for Cursor</h1>
 
-<p align="center">
-  Push notifications, human-in-the-loop questions, and permission gating for your Cursor agent.<br/>
-  Get a push when a task finishes, answer the agent from your phone, and approve risky commands before they run.
-</p>
+<p align="center">A control panel for your AI coding agent. Get a push when work finishes, answer the agent from your phone, and approve risky commands before they run.</p>
 
 ---
 
-Pushary is the **awareness and control layer** for your coding agent. Once installed, the
-agent can reach you on your phone, ask you for decisions, and route risky commands through
-your approval — even when you've stepped away from the editor.
+## What it is
+
+Pushary connects Cursor to your phone. When the agent finishes a task, needs a decision, or is about to run something risky, it reaches you with a push notification. You answer from the lock screen and the agent keeps going. It works even when you have stepped away from your computer.
 
 ## What it does
 
-- **Notify** — the agent sends a push when a multi-step task finishes or a build/test/deploy
-  fails, with the files changed, the error, and suggested next steps.
-- **Ask** — the agent asks you `confirm` / `select` / `input` questions via push and waits for
-  your answer from the lock screen.
-- **Gate** — risky shell commands (`rm`, force-push, history rewrites, DB drops, deploys,
-  `systemctl`, …) are intercepted by a `beforeShellExecution` hook and evaluated against your
-  Pushary policy **before they run**. What happens follows your dashboard policy — auto-approve
-  trusted commands, push to your phone for approval, or notify-only — shared across all your
-  agents, and it respects the dashboard **kill switch**. If Pushary is unreachable it falls back
-  to Cursor's own in-editor prompt, so it never silently runs a risky command. The hook is
-  **fail-closed**: if the gate can't run at all, the command is blocked rather than allowed unapproved.
+There are three things.
+
+1. Notify. The agent sends a push when a long task finishes, or when a build, test, or deploy fails. The push can include what changed, the error, and suggested next steps.
+
+2. Ask. The agent asks you questions through push: yes or no, multiple choice, or free text. It waits for your answer. When Pushary is connected, the agent sends its questions to your phone instead of waiting in the editor.
+
+3. Gate. Risky shell commands (like rm, force push, history rewrites, database drops, deploys, and systemctl) are checked before they run. What happens is set by your Pushary dashboard policy: auto approve trusted commands, push to your phone for approval, or just notify. If you do not answer in time, it falls back to Cursor's own prompt, so nothing dangerous runs silently. If the check cannot run at all, the command is blocked instead of allowed.
 
 ## Install
 
-**1. From the Cursor Marketplace** (recommended)
+You need two things: the plugin, and an API key.
 
-Open the Marketplace panel in Cursor, search **Pushary**, and install. Then set your API key
-(below).
+### Option 1: Cursor Marketplace (recommended)
 
-**2. With the CLI** (also configures Claude Code, Codex, Hermes)
+Open the Marketplace panel in Cursor, search for Pushary, and click install. Then set your API key (see below).
+
+### Option 2: CLI
+
+This also sets up Claude Code, Codex, and Hermes if you use them.
 
 ```bash
 npx @pushary/agent-hooks@latest setup
 ```
 
-**3. Manual MCP**
+### Option 3: Manual MCP
 
-Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+Add this to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` for every project:
 
 ```json
 {
@@ -58,67 +54,58 @@ Add to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
 }
 ```
 
-> However you install it, Pushary connects to the same MCP server
-> (`https://pushary.com/api/mcp/mcp`), so the plugin and the `@pushary/agent-hooks` CLI are
-> interchangeable — same backend, same tools.
+However you install it, Pushary talks to the same server, so the plugin and the CLI give you the same setup.
 
-### Set your API key
+## Set your API key
 
-The plugin reads your key from the `PUSHARY_API_KEY` environment variable. Get one at
-[pushary.com](https://pushary.com/sign-up?from=cursor-marketplace), then add it to your shell
-profile:
+The plugin reads your key from the `PUSHARY_API_KEY` environment variable. Get a key at https://pushary.com, then add it to your shell profile:
 
 ```bash
-echo 'export PUSHARY_API_KEY="pk_xxx.sk_xxx"' >> ~/.zshrc && source ~/.zshrc
+echo 'export PUSHARY_API_KEY="pk_xxx.sk_xxx"' >> ~/.zshrc
+source ~/.zshrc
 ```
 
-Install the [Pushary app](https://pushary.com) (or enable web push) on your phone so the agent
-can reach you.
+Install the Pushary app on your phone (or turn on web push) so the agent can reach you.
 
-## What's in the plugin
+## What is in the plugin
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| MCP server | `mcp.json` | Connects Cursor to the Pushary tools (`send_notification`, `ask_user`, `wait_for_answer`, `cancel_question`) |
-| Rule | `rules/pushary.mdc` | Always-on guidance so the agent uses Pushary proactively |
-| Skill | `skills/pushary/SKILL.md` | Full tool reference — parameters, examples, return shapes |
-| Hook | `hooks/hooks.json` + `scripts/pushary-gate.mjs` | Routes risky commands to a phone approval |
-| Commands | `commands/` | `/pushary-test`, `/notify-when-done` |
+| Part | File | What it does |
+|------|------|--------------|
+| MCP server | `mcp.json` | Connects Cursor to the Pushary tools: `send_notification`, `ask_user`, `wait_for_answer`, `cancel_question` |
+| Rule | `rules/pushary.mdc` | Always on guidance so the agent uses Pushary on its own |
+| Skill | `skills/pushary/SKILL.md` | Full tool reference: parameters, examples, return values |
+| Hook | `hooks/hooks.json` and `scripts/pushary-gate.mjs` | Sends risky commands to your phone for approval |
+| Commands | `commands/` | `/pushary-test` and `/notify-when-done` |
 
-### How the gate decides
+## How the gate decides
 
-Two layers:
+There are two layers.
 
-- **Matcher** (`hooks/hooks.json`) — a regex that decides which commands are *evaluated* at all.
-  Edit it to widen or narrow the set.
-- **Policy** (your Pushary dashboard) — decides what *happens* to a matched command, per tool:
-  auto-approve, the approval mode (push-and-wait, push-then-prompt, notify-only, prompt-only),
-  the timeout action, a live mode override, and the kill switch. This is the same policy your
-  other Pushary agents use, so behavior stays consistent across agents.
+1. The matcher in `hooks/hooks.json` is a list of patterns that decides which commands get checked at all. Edit it to add or remove patterns.
+
+2. Your Pushary dashboard policy decides what happens to a checked command, per tool: auto approve, the approval mode (push and wait, push then prompt, notify only, or prompt only), the timeout action, a live mode override, and the kill switch. This is the same policy your other Pushary agents use, so the behavior stays the same across agents.
 
 ## Commands
 
-- **`/pushary-test`** — send a test push to confirm delivery.
-- **`/notify-when-done`** — have the agent push a summary when the current task finishes.
+- `/pushary-test` sends a test push so you can confirm delivery.
+- `/notify-when-done` tells the agent to push a summary when the current task finishes.
 
 ## Development
 
-`skills/pushary/SKILL.md` mirrors the canonical Pushary skill shipped with
-[`@pushary/agent-hooks`](https://www.npmjs.com/package/@pushary/agent-hooks); keep the two in step.
+`skills/pushary/SKILL.md` mirrors the Pushary skill that ships with `@pushary/agent-hooks`. Keep the two the same.
 
 Test the plugin locally before publishing:
 
 ```bash
 ln -s "$(pwd)" ~/.cursor/plugins/local/pushary
-# then reload Cursor: Developer: Reload Window
 ```
+
+Then reload Cursor with Developer: Reload Window.
 
 ## Security
 
-This repository is open source and contains **no secrets** — the MCP key is supplied at
-runtime via `PUSHARY_API_KEY`. The gate script has no dependencies and only contacts
-`https://pushary.com`. See the source of `scripts/pushary-gate.mjs` for exactly what it sends.
+This repository has no secrets. Your key is read at runtime from `PUSHARY_API_KEY`. The gate script has no dependencies and only talks to pushary.com. Read `scripts/pushary-gate.mjs` to see exactly what it sends. See `SECURITY.md` for details.
 
 ## License
 
-MIT © Pushary
+MIT. See `LICENSE`.

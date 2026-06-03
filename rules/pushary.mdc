@@ -1,47 +1,40 @@
 ---
-description: Pushary — the awareness + control layer for this agent. Notify the user, ask them questions, and gate risky commands via push.
+description: Pushary is connected. Use it to ask the user questions, notify them, and gate risky commands through push.
 alwaysApply: true
 ---
 
-# Pushary — Control Panel for AI Agents
+# Pushary
 
-You have Pushary connected as an MCP server. It is the user's awareness and control
-layer for this session: reach them on their phone, ask for decisions, and route risky
-actions through their approval. Use it proactively — do not wait to be asked.
+Pushary is connected as an MCP server. It reaches the user on their phone, so use it on your own without being asked. Assume the user may be away from the editor.
 
-Three capabilities:
+## Ask the user through Pushary
 
-1. **Notify** — `send_notification` when something is worth the user's attention.
-2. **Ask** — `ask_user` when you need a decision (it blocks and returns the answer).
-3. **Gate** — risky shell commands are automatically intercepted and sent to the user
-   for phone approval before they run (via the plugin's `beforeShellExecution` hook).
+When Pushary is connected, it is your channel for reaching the user. Any time you would stop and ask the user something, ask it through the `ask_user` tool and wait for the answer, instead of only asking in the chat. This covers all of your questions:
 
-## When to notify (`send_notification`)
+- Yes or no. Use type "confirm".
+- Multiple choice. Use type "select" with 2 to 6 options.
+- A name, a path, a value, or other free text. Use type "input".
+- Approval of a plan or an approach before you start. Use type "select" with the options the user is choosing between, or "confirm" to approve a single plan.
 
-- A task of 3+ steps finishes → `context.type = "task_complete"` with a short summary
-  and `filesChanged`.
-- A build, test suite, or deploy fails → `context.type = "error"` with `errorMessage`.
-- A long-running job (migration, refactor, generation) completes.
+`ask_user` blocks and returns `{ answered, value }`. Always set `context` to one line on what you are doing, and set `agentName` to "Cursor - {project}". If `answered` is false, you did not get an answer in time: pick the safe default or stop and tell the user. Never assume approval.
 
-## When to ask (`ask_user`)
+If the user answers in the chat before the push comes back, continue and call `cancel_question` with the correlationId to clean up.
 
-- `type: "confirm"` — before a destructive or irreversible action, or any binary go/abort.
-- `type: "select"` — when 2–6 known options exist (e.g. competing approaches).
-- `type: "input"` — when you need a name, path, or value that can't be enumerated.
+## Notify the user
 
-`ask_user` blocks and returns `{ answered, value }`. If `answered` is false (timeout),
-pick the safe default or stop and notify — never assume approval.
+Use `send_notification` when something is worth the user's attention:
 
-## Command gating
+- A task of 3 or more steps finishes. Use `context.type` "task_complete" with a short summary and the files changed.
+- A build, test, or deploy fails. Use `context.type` "error" with the error message.
+- A long job finishes, such as a migration, refactor, or generation.
 
-Risky commands (`rm`, force-push, history rewrites, DB drops, deploys, `systemctl`, …)
-are gated to a phone approval automatically. You do not need to ask separately for those.
-For anything else destructive that the hook might not catch, still `ask_user` first.
+## Risky commands are gated for you
 
-## Etiquette
+Risky shell commands (rm, force push, history rewrites, database drops, deploys, systemctl, and similar) are sent to the user for phone approval automatically by the plugin's hook, following the user's Pushary policy. You do not need to ask separately for those. For anything else destructive that the hook might not catch, ask first with `ask_user`.
 
-- Always pass `agentName` as `"Cursor - {project}"` so the user knows who is asking.
-- Titles under 60 chars, bodies under 200 — put detail in the `context` object.
-- Max 3 notifications per task unless the user asks for more.
+## Keep it tidy
 
-Full tool reference (parameters, examples, return shapes): see the **pushary** skill.
+- Keep titles under 60 characters and bodies under 200. Put detail in the `context` object, not the title.
+- Send at most 3 notifications per task unless the user asks for more.
+
+For the full tool reference, with every parameter, examples, and return values, see the pushary skill.
