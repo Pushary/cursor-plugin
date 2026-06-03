@@ -29,7 +29,8 @@
 import { createHash } from 'node:crypto'
 import { hostname, tmpdir } from 'node:os'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const BASE_URL = 'https://pushary.com'
 const MCP_URL = `${BASE_URL}/api/mcp/mcp`
@@ -82,6 +83,20 @@ const readStdin = async () => {
 }
 
 const getMachineId = () => createHash('sha256').update(hostname()).digest('hex').slice(0, 8)
+
+// Env first. CLI installs inject the key into the sibling mcp.json, so fall back to
+// that. This lets the gate work even when Cursor's GUI does not pass the shell env.
+const resolveApiKey = () => {
+  const fromEnv = process.env.PUSHARY_API_KEY
+  if (fromEnv) return fromEnv
+  try {
+    const mcpPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'mcp.json')
+    const auth = JSON.parse(readFileSync(mcpPath, 'utf-8'))?.mcpServers?.pushary?.headers?.Authorization ?? ''
+    const key = auth.replace(/^Bearer\s+/i, '').trim()
+    if (/^pk_[a-z0-9]+\.[a-z0-9]+$/i.test(key)) return key
+  } catch {}
+  return undefined
+}
 
 // ── MCP transport (JSON or SSE) ─────────────────────────────────────────────────
 const parseMcpBody = (body, contentType) => {
@@ -292,7 +307,7 @@ const main = async () => {
   const command = typeof input.command === 'string' ? input.command.trim() : ''
   if (!command) return respond(ask())
 
-  const apiKey = process.env.PUSHARY_API_KEY
+  const apiKey = resolveApiKey()
   if (!apiKey) {
     return respond(
       ask('Pushary is not configured: set the PUSHARY_API_KEY environment variable (get a key at https://pushary.com) to route this approval to your phone.')
