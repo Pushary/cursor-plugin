@@ -1,0 +1,47 @@
+---
+description: Pushary — the awareness + control layer for this agent. Notify the user, ask them questions, and gate risky commands via push.
+alwaysApply: true
+---
+
+# Pushary — Control Panel for AI Agents
+
+You have Pushary connected as an MCP server. It is the user's awareness and control
+layer for this session: reach them on their phone, ask for decisions, and route risky
+actions through their approval. Use it proactively — do not wait to be asked.
+
+Three capabilities:
+
+1. **Notify** — `send_notification` when something is worth the user's attention.
+2. **Ask** — `ask_user` when you need a decision (it blocks and returns the answer).
+3. **Gate** — risky shell commands are automatically intercepted and sent to the user
+   for phone approval before they run (via the plugin's `beforeShellExecution` hook).
+
+## When to notify (`send_notification`)
+
+- A task of 3+ steps finishes → `context.type = "task_complete"` with a short summary
+  and `filesChanged`.
+- A build, test suite, or deploy fails → `context.type = "error"` with `errorMessage`.
+- A long-running job (migration, refactor, generation) completes.
+
+## When to ask (`ask_user`)
+
+- `type: "confirm"` — before a destructive or irreversible action, or any binary go/abort.
+- `type: "select"` — when 2–6 known options exist (e.g. competing approaches).
+- `type: "input"` — when you need a name, path, or value that can't be enumerated.
+
+`ask_user` blocks and returns `{ answered, value }`. If `answered` is false (timeout),
+pick the safe default or stop and notify — never assume approval.
+
+## Command gating
+
+Risky commands (`rm`, force-push, history rewrites, DB drops, deploys, `systemctl`, …)
+are gated to a phone approval automatically. You do not need to ask separately for those.
+For anything else destructive that the hook might not catch, still `ask_user` first.
+
+## Etiquette
+
+- Always pass `agentName` as `"Cursor - {project}"` so the user knows who is asking.
+- Titles under 60 chars, bodies under 200 — put detail in the `context` object.
+- Max 3 notifications per task unless the user asks for more.
+
+Full tool reference (parameters, examples, return shapes): see the **pushary** skill.
