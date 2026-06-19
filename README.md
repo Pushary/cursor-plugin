@@ -71,7 +71,7 @@ Install the Pushary app on your phone (or turn on web push) so the agent can rea
 
 | Part | File | What it does |
 |------|------|--------------|
-| MCP server | `mcp.json` | Connects Cursor to the Pushary tools: `send_notification`, `ask_user`, `wait_for_answer`, `cancel_question` |
+| MCP server | `mcp.json` | Connects Cursor to the Pushary tools: `send_notification`, `ask_user`, `wait_for_answer`, `cancel_question`, `list_sessions` |
 | Rule | `rules/pushary.mdc` | Always on guidance so the agent uses Pushary on its own |
 | Skill | `skills/pushary/SKILL.md` | Full tool reference: parameters, examples, return values |
 | Hook | `hooks/hooks.json` and `scripts/pushary-gate.mjs` | Sends risky commands to your phone for approval |
