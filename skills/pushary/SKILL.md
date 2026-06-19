@@ -239,6 +239,20 @@ Cancel a pending question so it can no longer be answered. Use when the question
 |------|------|----------|-------------|
 | correlationId | string (uuid) | Yes | The correlationId of the question to cancel |
 
+### list_sessions
+
+Read-only. Returns the live agent sessions for your site (keyed by machine and session) and any pending approval questions, so you can see which of your parallel agents is active, idle, waiting, or errored. Does NOT start, stop, or steer agents, and sends no notification. Useful when you are one of several agents and want to check whether another session is blocked on a question before acting.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| status | "active" / "idle" / "waiting" / "errored" | No | Filter to sessions with this computed status |
+| limit | integer | No | Maximum number of sessions to return, most recently seen first (1-100) |
+
+**Returns:**
+- `{ "sessions": [...], "pendingQuestions": [...] }` current sessions and open questions for the site
+
 ## Permission Gating (REQUIRED)
 
 Before executing any of the following, you MUST call `ask_user` with type "confirm" and wait for approval. Do NOT proceed without an explicit "yes" from the user:
