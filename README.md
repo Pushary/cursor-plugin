@@ -48,7 +48,7 @@ Add this to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` for ever
     "pushary": {
       "type": "http",
       "url": "https://pushary.com/api/mcp/mcp",
-      "headers": { "Authorization": "Bearer ${PUSHARY_API_KEY}" }
+      "headers": { "Authorization": "Bearer ${env:PUSHARY_API_KEY}" }
     }
   }
 }
@@ -66,6 +66,8 @@ source ~/.zshrc
 ```
 
 Install the Pushary app on your phone (or turn on web push) so the agent can reach you.
+
+Troubleshooting: macOS GUI apps do not read `.zshrc`. If Settings > MCP shows pushary red after setting the variable, launch Cursor from a terminal where `PUSHARY_API_KEY` is exported, or set it system-wide so the Cursor GUI process can see it.
 
 ## What is in the plugin
 
