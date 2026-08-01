@@ -67,7 +67,9 @@ source ~/.zshrc
 
 Install the Pushary app on your phone (or turn on web push) so the agent can reach you.
 
-Troubleshooting: macOS GUI apps do not read `.zshrc`. If Settings > MCP shows pushary red after setting the variable, launch Cursor from a terminal where `PUSHARY_API_KEY` is exported, or set it system-wide so the Cursor GUI process can see it.
+## Troubleshooting
+
+macOS GUI apps do not read `.zshrc`. If Settings > MCP shows pushary in red after you set the env var, launch Cursor from a terminal where `PUSHARY_API_KEY` is exported, or set the variable system-wide so GUI apps see it.
 
 ## What is in the plugin
 

@@ -447,6 +447,41 @@ const fetchModeState = async (apiKey, sessionId) => {
   }
 }
 
+// Secret redaction, two tiers, mirroring SECRET_REDACTION_RULES in @pushary/contracts.
+// The precise rules only match real credential shapes, so they are safe on a line a
+// human reads: a git SHA, a path and prose all survive. The high-entropy catch-all
+// over-redacts by design and is therefore only ever applied to a full body dump.
+//
+// This gate previously did no redaction at all, so the raw command went out in the
+// question, the notification body and the action body alike. A key on the command
+// line reached the lock screen verbatim.
+const ACTION_BODY_MAX = 4000
+const ACTION_BODY_TRUNCATION_MARKER = '\n… [truncated]'
+const REDACTION_RULES = [
+  [/-----BEGIN[A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z0-9 ]*PRIVATE KEY-----/g, '[redacted key]'],
+  [/\bsk-[A-Za-z0-9_-]{16,}\b/g, '[redacted]'],
+  [/\b[spr]k_(?:live|test)_[A-Za-z0-9]{8,}\b/g, '[redacted]'],
+  [/\bwhsec_[A-Za-z0-9]{16,}\b/g, '[redacted]'],
+  [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b/g, '[redacted]'],
+  [/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, '[redacted]'],
+  [/\bglpat-[A-Za-z0-9_-]{20,}\b/g, '[redacted]'],
+  [/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '[redacted]'],
+  [/\bAIza[A-Za-z0-9_-]{35}\b/g, '[redacted]'],
+  [/\bAKIA[0-9A-Z]{16}\b/g, '[redacted]'],
+  [/\bnpm_[A-Za-z0-9]{36}\b/g, '[redacted]'],
+  [/\bxai-[A-Za-z0-9]{16,}\b/g, '[redacted]'],
+  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[redacted]'],
+  [/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, 'bearer [redacted]'],
+  [/\bauthorization:\s*\S+/gi, 'authorization: [redacted]'],
+  [/((?:secret|token|password|passwd|api[_-]?key|access[_-]?key|client[_-]?secret|private[_-]?key)\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|\S+)/gi, '$1[redacted]'],
+]
+const HIGH_ENTROPY_RULE = [/[A-Za-z0-9+/]{40,}={0,2}/g, '[redacted]']
+export const redactSecrets = (text) => REDACTION_RULES.reduce((acc, [pattern, replacement]) => acc.replace(pattern, replacement), text)
+const redactSecretsDeep = (text) => redactSecrets(text).replace(HIGH_ENTROPY_RULE[0], HIGH_ENTROPY_RULE[1])
+const capActionBody = (text) =>
+  text.length <= ACTION_BODY_MAX ? text : `${text.slice(0, ACTION_BODY_MAX - ACTION_BODY_TRUNCATION_MARKER.length)}${ACTION_BODY_TRUNCATION_MARKER}`
+const deriveActionBody = (command) => capActionBody(redactSecretsDeep(command))
+
 // ── ask / wait ───────────────────────────────────────────────────────────────
 // toolTarget and actionBody are what let the server classify risk, drop the
 // one-tap Approve on a dangerous call, and record a decision at the same grain as
@@ -455,7 +490,7 @@ const fetchModeState = async (apiKey, sessionId) => {
 const commandHead = (command) => command.trim().split(/\s+/).slice(0, 2).join(' ').slice(0, 120)
 
 const askArgs = (command, project, ident) => ({
-  question: `Allow this command?\n\n${command}`,
+  question: `Allow this command?\n\n${redactSecrets(command)}`,
   type: 'confirm',
   context: `Cursor agent wants to run this in ${project}`,
   agentName: ident.agentName,
@@ -463,7 +498,7 @@ const askArgs = (command, project, ident) => ({
   machineId: ident.machineId,
   toolName: 'Bash',
   toolTarget: commandHead(command),
-  actionBody: command.slice(0, 4000),
+  actionBody: deriveActionBody(command),
   wait: false,
 })
 
@@ -531,7 +566,7 @@ const handleNotifyOnly = async (apiKey, command, project, ident) => {
   try {
     await callTool(apiKey, 'send_notification', {
       title: 'Agent needs approval',
-      body: command.slice(0, 180),
+      body: redactSecrets(command).slice(0, 180),
       agentName: ident.agentName,
       sessionId: ident.sessionId,
       machineId: ident.machineId,
