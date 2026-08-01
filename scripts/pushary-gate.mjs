@@ -447,6 +447,31 @@ const fetchModeState = async (apiKey, sessionId) => {
   }
 }
 
+// ── network diagnosis ────────────────────────────────────────────────────────
+//
+// This gate is a dependency-free .mjs, so unlike the CLI it cannot install
+// undici's EnvHttpProxyAgent and its fetch ignores HTTP_PROXY entirely. Node
+// gained a native equivalent in 24 (NODE_USE_ENV_PROXY), but that is read at
+// startup, so a script cannot switch it on for itself.
+//
+// The gate already fails safe: any error here hands the decision to the editor's
+// own prompt. The cost is therefore not a blocked command, it is SILENCE. On a
+// corporate network every approval quietly stops reaching the phone and the only
+// trace is one stderr line nobody reads. So when a proxy is configured and the
+// network call fails, say which of those two it is.
+export const PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']
+
+export const proxyConfigured = (env = process.env) =>
+  PROXY_VARS.some(name => (env[name] ?? '').trim() !== '')
+
+export const describeNetworkFailure = (error, env = process.env) => {
+  const detail = error?.message ?? String(error)
+  if (!proxyConfigured(env)) return detail
+  const enabled = (env.NODE_USE_ENV_PROXY ?? '').trim() !== ''
+  if (enabled) return detail
+  return `${detail} (a proxy is set in HTTP_PROXY/HTTPS_PROXY and this hook cannot use it; on Node 24+ set NODE_USE_ENV_PROXY=1 in the editor's environment)`
+}
+
 // Secret redaction, two tiers, mirroring SECRET_REDACTION_RULES in @pushary/contracts.
 // The precise rules only match real credential shapes, so they are safe on a line a
 // human reads: a git SHA, a path and prose all survive. The high-entropy catch-all
