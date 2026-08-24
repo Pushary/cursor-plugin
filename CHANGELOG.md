@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.0
+
+The gate stopped carrying its own copy of the policy engine.
+
+Pattern matching, glob compilation, the destructive-command list and policy
+resolution all lived in this file, roughly two hundred and fifty lines of it,
+kept in step with the real engine by hand. That is how 0.1.1 happened: the copy
+matched on tool name alone, so every argument rule was invisible here. It also
+never gained the safe read-only allowlist, so `git status` reached your phone
+from Cursor and from nowhere else.
+
+The gate now asks the server, which runs the same engine as every other client
+over the same policy and mode state. There is nothing left to keep in step.
+
+- The safe read-only allowlist applies here now: ordinary read-only commands
+  stop reaching your phone.
+- A policy change takes effect immediately. The five-minute on-disk policy cache
+  is gone, along with the stale-cache fallback.
+- An unreachable Pushary hands the command to Cursor's own prompt, as before.
+  Nothing is ever denied because we could not reach the server.
+
 ## 0.1.1
 
 Policy parity with the other agents. The gate matched rules on tool NAME alone, so

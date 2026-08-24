@@ -27,20 +27,17 @@
 // it unapproved.
 
 import { createHash } from 'node:crypto'
-import { hostname, tmpdir } from 'node:os'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
+import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const BASE_URL = 'https://pushary.com'
 const MCP_URL = `${BASE_URL}/api/mcp/mcp`
-const POLICY_CACHE_TTL_MS = 5 * 60 * 1000
 const MAX_BLOCK_MS = 45_000 // longest we can wait before Cursor's hook timeout
 const WAIT_CHUNK_MS = 20_000 // per wait_for_answer long-poll
 const POLL_GAP_MS = 1_500 // pause between polls after a transient error
 const NET_TIMEOUT_MS = 27_000 // abort a single MCP request
-const POLICY_TIMEOUT_MS = 10_000
-const MODE_TIMEOUT_MS = 3_000
 const HARD_GUARD_MS = 55_000 // force a graceful "ask" before failClosed (60s) fires
 
 // ── Cursor decisions ──────────────────────────────────────────────────────────
@@ -229,221 +226,51 @@ const callTool = async (apiKey, name, args) => {
   return JSON.parse(payload)
 }
 
-const getJson = async (path, apiKey, timeoutMs) => {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    signal: AbortSignal.timeout(timeoutMs),
-  })
-  if (!response.ok) throw new Error(`GET ${path} ${response.status}`)
-  return response.json()
-}
-
-// ── Policy (mirrors @pushary/agent-hooks policy.ts) ──────────────────────────────
-const isPolicyConfig = (d) =>
-  !!d && typeof d === 'object' && Array.isArray(d.policies) && typeof d.defaultTimeoutSeconds === 'number' && typeof d.defaultTimeoutAction === 'string'
-
-// Keyed by the capability as well as the key: the server returns a different rule
-// set to a client that did not ask for repo-scoped rules, so one key for both
-// would serve the wrong policy across an upgrade.
-const policyCacheFile = (apiKey) =>
-  join(tmpdir(), `pushary-policy-${createHash('sha256').update(`${apiKey}:cursor:repoAware`).digest('hex').slice(0, 12)}.json`)
-
-const getPolicy = async (apiKey) => {
-  const path = policyCacheFile(apiKey)
-  let stale = null
-  if (existsSync(path)) {
-    try {
-      const cached = JSON.parse(readFileSync(path, 'utf-8'))
-      if (isPolicyConfig(cached)) {
-        if (!cached._cachedAt || Date.now() - cached._cachedAt < POLICY_CACHE_TTL_MS) return cached
-        stale = cached
-      }
-    } catch {}
-  }
-  try {
-    const fresh = await withRetry(async () => {
-      const raw = await getJson('/api/mcp/policy?repoAware=1', apiKey, POLICY_TIMEOUT_MS)
-      if (!isPolicyConfig(raw)) throw new Error('invalid policy')
-      return raw
-    }, 2)
-    try {
-      writeFileSync(path, JSON.stringify({ ...fresh, _cachedAt: Date.now() }), 'utf-8')
-    } catch {}
-    return fresh
-  } catch (error) {
-    if (stale) return stale
-    throw error
-  }
-}
-
-// ── Rule matching ────────────────────────────────────────────────────────────
-// Ported from @pushary/contracts (agent-hooks 0.56.0). This file cannot take a
-// dependency — a Cursor plugin is cloned, not installed — so the logic is
-// vendored. Keep it in step with packages/contracts/src/index.ts; the cases in
-// scripts/pushary-gate.test.mjs mirror the ones in policy.test.ts.
+// ── The verdict ─────────────────────────────────────────────────────────────
+// Asked for, not worked out here.
 //
-// Previously this matched on tool NAME alone, which meant every argument rule was
-// invisible here: a user's own `Bash(rm:*)` deny did nothing and `rm -rf` was
-// auto-approved by a broad `Bash` allow. Cursor was strictly less safe than
-// Claude Code for the same policy.
+// This file used to carry its own copy of the authorization boundary: pattern
+// matching, glob compilation, a destructive-command list and policy resolution,
+// roughly two hundred and fifty lines of it. A copy of a rule is a rule that
+// drifts, and this one had already drifted twice. It matched on tool name alone
+// once, so a user's own `Bash(rm:*)` deny did nothing while a broad `Bash` allow
+// approved `rm -rf`. And it never gained `isSafeReadOnlyCommand`, so `git status`
+// reached the phone here and nowhere else.
+//
+// The server now answers with the same `resolveGate` the CLI runs, over the same
+// state, so there is one boundary and this asks it. What stays local is only
+// what a server cannot know: the repository this checkout is in, which needs a
+// parent walk and a git config read on this machine.
 
-const MATCH_RANKS = ['none', 'tool', 'prefix', 'exact']
-const matchRankWeight = (rank) => MATCH_RANKS.indexOf(rank)
+const GATE_TIMEOUT_MS = 5000
 
-const GLOB_MAX_WILDCARDS = 8
-const GLOB_MAX_ARG_LENGTH = 4096
-
-// Offset propagation rather than a compiled regex: several `**` render as `.*`
-// and backtrack catastrophically on a long non-matching argument, which would
-// hang this gate and, with failClosed, block the command.
-const globMatches = (glob, text) => {
-  let stars = 0
-  for (const ch of glob) if (ch === '*') stars += 1
-  if (stars > GLOB_MAX_WILDCARDS) return false
-
-  const tokens = []
-  let literal = ''
-  const flush = () => { if (literal) { tokens.push({ literal }); literal = '' } }
-  for (let i = 0; i < glob.length; i += 1) {
-    if (glob[i] !== '*') { literal += glob[i]; continue }
-    flush()
-    if (glob[i + 1] === '*') { tokens.push({ any: true }); i += 1 } else { tokens.push({ any: false }) }
-  }
-  flush()
-
-  const n = text.length
-  let reach = new Uint8Array(n + 1)
-  reach[0] = 1
-  for (const token of tokens) {
-    const next = new Uint8Array(n + 1)
-    if (token.literal !== undefined) {
-      for (let p = 0; p <= n - token.literal.length; p += 1) {
-        if (reach[p] && text.startsWith(token.literal, p)) next[p + token.literal.length] = 1
-      }
-    } else {
-      let open = 0
-      for (let p = 0; p <= n; p += 1) {
-        if (!token.any && p > 0 && text.charCodeAt(p - 1) === 47) open = 0
-        if (reach[p]) open = 1
-        if (open) next[p] = 1
-      }
-    }
-    reach = next
-  }
-  return reach[n] === 1
-}
-
-const matchToolPattern = (pattern, toolName, arg) => {
-  const open = pattern.indexOf('(')
-  if (open === -1 || !pattern.endsWith(')')) return pattern === toolName ? 'tool' : 'none'
-  if (pattern.slice(0, open) !== toolName || arg === undefined) return 'none'
-  const inner = pattern.slice(open + 1, -1)
-  if (inner.endsWith(':*')) return arg.startsWith(inner.slice(0, -2)) ? 'prefix' : 'none'
-  if (inner.includes('*')) {
-    if (arg.length > GLOB_MAX_ARG_LENGTH) return 'none'
-    return globMatches(inner, arg) ? 'prefix' : 'none'
-  }
-  return arg === inner ? 'exact' : 'none'
-}
-
-// A rule with no repoKey applies everywhere; a scoped one only in its own repo,
-// and never when the repo could not be established.
-const repoMatches = (ruleRepoKey, currentRepoKey) => !ruleRepoKey || ruleRepoKey === currentRepoKey
-
-// Rank first, then a repo-scoped rule over a workspace-wide one, then the longer
-// pattern — the same precedence the hook applies.
-const findBestMatch = (policies, toolName, arg, repoKey) => {
-  let best
-  let bestWeight = 0
-  let bestScoped = -1
-  let bestLength = -1
-  for (const candidate of policies) {
-    if (!repoMatches(candidate.repoKey, repoKey)) continue
-    const rank = matchToolPattern(candidate.tool, toolName, arg)
-    if (rank === 'none') continue
-    const weight = matchRankWeight(rank)
-    const scoped = candidate.repoKey ? 1 : 0
-    const length = rank === 'prefix' ? candidate.tool.length : -1
-    if (
-      weight > bestWeight ||
-      (weight === bestWeight && scoped > bestScoped) ||
-      (weight === bestWeight && scoped === bestScoped && length > bestLength)
-    ) {
-      best = { policy: candidate, rank }
-      bestWeight = weight
-      bestScoped = scoped
-      bestLength = length
-    }
-  }
-  return best
-}
-
-// The destructive ceiling. A call the classifier flags must never auto-approve
-// through a general bare-tool or wildcard rule, so the "destructive always asks"
-// guarantee holds for wrapped or unlisted commands too. An explicit rule the user
-// wrote still wins. Mirrors APPROVAL_FATIGUE_FLAG_PATTERNS in contracts.
-const DESTRUCTIVE_PATTERNS = [
-  /\brm\s+-[a-z]*r/i,
-  /\brmdir\b/i,
-  /git\s+push[^\n]*(--force|--force-with-lease|\s-f\b)/i,
-  /git\s+reset\s+--hard/i,
-  /git\s+clean\s+-[a-z]*f/i,
-  /\bdrop\s+(table|database|schema)\b/i,
-  /\bdelete\s+from\b/i,
-  /\btruncate\b/i,
-  /\b(deploy|publish|release)\b/i,
-  /\bnpm\s+publish\b/i,
-  /\bsudo\b/i,
-  /chmod\s+-?R?\s*777/i,
-  /\bkubectl\s+delete\b/i,
-  /\bterraform\s+(apply|destroy)\b/i,
-  /\bdocker\s+system\s+prune\b/i,
-]
-
-const isDestructive = (command) => DESTRUCTIVE_PATTERNS.some((re) => re.test(command))
-
-// The safe-read-only floor is deliberately NOT ported. It only ever loosens a
-// decision, and hooks.json already routes just the risky commands here, so
-// omitting it can cost an extra prompt but can never approve something unsafe.
-
-const resolvePolicy = (config, toolName, modeOverride, command, repoKey) => {
-  const match = findBestMatch(config.policies, toolName, command, repoKey)
-  let base =
-    match?.policy ??
-    config.policies.find((p) => p.tool === '*') ??
-    {
-      tool: toolName,
-      timeoutSeconds: config.defaultTimeoutSeconds,
-      timeoutAction: config.defaultTimeoutAction,
-      mode: config.defaultMode ?? 'push_first',
-      pushFirstSeconds: config.defaultPushFirstSeconds ?? 20,
-    }
-
-  const governedBySpecificRule = match?.rank === 'exact' || match?.rank === 'prefix'
-  const wouldAutoApprove = base.timeoutSeconds === 0 && base.timeoutAction === 'approve'
-  if (!governedBySpecificRule && wouldAutoApprove && typeof command === 'string' && isDestructive(command)) {
-    base = {
-      tool: base.tool,
-      timeoutSeconds: config.defaultTimeoutSeconds,
-      timeoutAction: 'wait',
-      mode: 'push_first',
-      pushFirstSeconds: config.defaultPushFirstSeconds ?? 20,
-    }
-  }
-
-  const effective = modeOverride ?? config.modeOverride
-  return effective ? { ...base, mode: effective } : base
-}
-
-const APPROVAL_MODES = ['push_only', 'terminal_only', 'push_first', 'notify_only']
-const fetchModeState = async (apiKey, sessionId) => {
+/**
+ * The verdict for one command, or null if we could not get one.
+ *
+ * Null is not a denial and not an approval: every failure here hands the call
+ * back to Cursor's own prompt, exactly as if this gate were not installed.
+ */
+const decide = async (apiKey, command, cwd, sessionId) => {
   try {
-    const path = sessionId ? `/api/mcp/mode?session=${encodeURIComponent(sessionId)}` : '/api/mcp/mode'
-    const data = await getJson(path, apiKey, MODE_TIMEOUT_MS)
-    const mode = data?.override?.mode
-    return { mode: APPROVAL_MODES.includes(mode) ? mode : null, kill: data?.kill === true }
+    const response = await fetch(`${BASE_URL}/api/agent/gate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        v: 1,
+        source: 'cursor',
+        toolName: 'Bash',
+        toolInputs: [{ command }],
+        cwd,
+        repoKey: deriveRepoKey(cwd),
+        sessionId,
+      }),
+      signal: AbortSignal.timeout(GATE_TIMEOUT_MS),
+    })
+    if (!response.ok) return null
+    const verdict = await response.json()
+    return verdict && typeof verdict.kind === 'string' ? verdict : null
   } catch {
-    return { mode: null, kill: false }
+    return null
   }
 }
 
@@ -624,12 +451,17 @@ const main = async () => {
   const ident = { agentName: `Cursor - ${project}`, sessionId, machineId: getMachineId() }
 
   try {
-    const [policy, modeState] = await Promise.all([getPolicy(apiKey), fetchModeState(apiKey, sessionId)])
+    const verdict = await decide(apiKey, command, input.cwd, sessionId)
 
-    if (modeState.kill) return respond(deny('Stopped by user — this agent was halted from Pushary. Do not run this command.'))
+    // No verdict, or one that says nothing: Cursor's own prompt decides, exactly
+    // as if this gate were not installed. Never a forced denial on an outage.
+    if (!verdict || verdict.kind === 'no_opinion') return respond(ask())
+    if (verdict.kind === 'kill') return respond(deny(verdict.reason))
+    if (verdict.kind === 'allow') return respond(ALLOW)
+    if (verdict.kind === 'deny') return respond(deny(verdict.reason))
+    if (verdict.kind !== 'ask') return respond(ask())
 
-    const tool = resolvePolicy(policy, 'Bash', modeState.mode, command, deriveRepoKey(input.cwd))
-    if (tool.timeoutSeconds === 0 && tool.timeoutAction === 'approve') return respond(ALLOW)
+    const tool = verdict.policy
 
     switch (tool.mode) {
       case 'terminal_only':
@@ -650,7 +482,7 @@ const main = async () => {
 
 // Exported for scripts/pushary-gate.test.mjs. main() only runs when the gate is
 // executed directly, so importing this file for a test does not read stdin.
-export { matchToolPattern, resolvePolicy, isDestructive, normalizeRepoRemote, deriveRepoKey }
+export { normalizeRepoRemote, deriveRepoKey }
 
 const isDirectRun = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 if (!isDirectRun) {
