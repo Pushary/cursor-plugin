@@ -8,6 +8,13 @@
         "timeout": 60,
         "failClosed": true
       }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 60,
+        "failClosed": true
+      }
     ]
   }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Pushary gate — Cursor `beforeShellExecution` hook.
+// Pushary gate — Cursor `beforeShellExecution` and `beforeMCPExecution` hooks.
 //
 // Routes risky shell commands through your Pushary permission policy before they
 // run. Which commands reach this gate is the `matcher` in ../hooks/hooks.json; what
@@ -16,7 +16,9 @@
 // Self-contained: no dependencies, uses the global fetch (Node 18+).
 //
 // Contract (https://cursor.com/docs/hooks):
-//   stdin  : { "command": string, "cwd": string, "conversation_id": string, ... }
+//   stdin  : { "hook_event_name": string, "cwd": string, "conversation_id": string, ... }
+//            beforeShellExecution adds { "command": string }
+//            beforeMCPExecution   adds { "tool_name", "tool_input", "mcp_server_name" }
 //   stdout : { "permission": "allow" | "deny" | "ask", "user_message"?, "agent_message"? }
 //
 // Failure model: every handled path writes a decision and exits 0. Network/parse
@@ -38,6 +40,7 @@ const MAX_BLOCK_MS = 45_000 // longest we can wait before Cursor's hook timeout
 const WAIT_CHUNK_MS = 20_000 // per wait_for_answer long-poll
 const POLL_GAP_MS = 1_500 // pause between polls after a transient error
 const NET_TIMEOUT_MS = 27_000 // abort a single MCP request
+const WITHDRAW_TIMEOUT_MS = 4_000
 const HARD_GUARD_MS = 55_000 // force a graceful "ask" before failClosed (60s) fires
 
 // ── Cursor decisions ──────────────────────────────────────────────────────────
@@ -206,7 +209,7 @@ const parseMcpBody = (body, contentType) => {
   return JSON.parse(body)
 }
 
-const callTool = async (apiKey, name, args) => {
+const callTool = async (apiKey, name, args, timeoutMs = NET_TIMEOUT_MS) => {
   const response = await fetch(MCP_URL, {
     method: 'POST',
     headers: {
@@ -215,7 +218,7 @@ const callTool = async (apiKey, name, args) => {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call', params: { name, arguments: args } }),
-    signal: AbortSignal.timeout(NET_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   })
   const text = await response.text()
   if (!response.ok) throw new Error(`Pushary MCP ${response.status}`)
@@ -245,12 +248,12 @@ const callTool = async (apiKey, name, args) => {
 const GATE_TIMEOUT_MS = 5000
 
 /**
- * The verdict for one command, or null if we could not get one.
+ * The verdict for one request, or null if we could not get one.
  *
  * Null is not a denial and not an approval: every failure here hands the call
  * back to Cursor's own prompt, exactly as if this gate were not installed.
  */
-const decide = async (apiKey, command, cwd, sessionId) => {
+const decide = async (apiKey, request, cwd, sessionId) => {
   try {
     const response = await fetch(`${BASE_URL}/api/agent/gate`, {
       method: 'POST',
@@ -258,8 +261,8 @@ const decide = async (apiKey, command, cwd, sessionId) => {
       body: JSON.stringify({
         v: 1,
         source: 'cursor',
-        toolName: 'Bash',
-        toolInputs: [{ command }],
+        toolName: request.toolName,
+        toolInputs: request.toolInputs,
         cwd,
         repoKey: deriveRepoKey(cwd),
         sessionId,
@@ -341,16 +344,16 @@ const deriveActionBody = (command) => capActionBody(redactSecretsDeep(command))
 // lock screen ungated.
 const commandHead = (command) => command.trim().split(/\s+/).slice(0, 2).join(' ').slice(0, 120)
 
-const askArgs = (command, project, ident) => ({
-  question: `Allow this command?\n\n${redactSecrets(command)}`,
+const askArgs = (request, project, ident) => ({
+  question: `${request.prompt}\n\n${redactSecrets(request.display)}`,
   type: 'confirm',
-  context: `Cursor agent wants to run this in ${project}`,
+  context: `Cursor agent wants to ${request.verb} in ${project}`,
   agentName: ident.agentName,
   sessionId: ident.sessionId,
   machineId: ident.machineId,
-  toolName: 'Bash',
-  toolTarget: commandHead(command),
-  actionBody: deriveActionBody(command),
+  toolName: request.toolName,
+  toolTarget: request.toolTarget,
+  actionBody: deriveActionBody(request.display),
   wait: false,
 })
 
@@ -374,22 +377,127 @@ const pollForAnswer = async (apiKey, correlationId, deadlineMs) => {
 const fromTimeoutAction = (action, deniedReason) =>
   action === 'approve' ? ALLOW : action === 'deny' ? deny(deniedReason) : ask()
 
-const DENIED = 'The user denied this command via a Pushary push approval. Do not run it — propose an alternative or ask how to proceed.'
+const fromAnswer = (answer, deniedReason) => {
+  if (answer.value === 'defer') return ask()
+  return answer.value === 'yes' ? ALLOW : deny(deniedReason)
+}
+
+const withdraw = async (apiKey, correlationId) => {
+  const unanswered = { answered: false }
+  let cancelled
+  try {
+    cancelled = await callTool(apiKey, 'cancel_question', { correlationId }, WITHDRAW_TIMEOUT_MS)
+  } catch {
+    return unanswered
+  }
+  if (cancelled?.cancelled !== false || cancelled?.status === 'unavailable') return unanswered
+  try {
+    const answer = await callTool(apiKey, 'wait_for_answer', { correlationId, timeoutMs: 1_000 }, WITHDRAW_TIMEOUT_MS)
+    return answer?.answered ? answer : unanswered
+  } catch {
+    return unanswered
+  }
+}
+
+const handedOff = (asked) => asked.suppressed || asked.status === 'terminal'
+
+const handoffMessage = (asked) =>
+  asked.suppressed ? 'You are at the keyboard, approve here.' : 'Delivery mode is Terminal, approve here.'
+
+const denialFor = (noun) =>
+  `The user denied this ${noun} via a Pushary push approval. Do not run it — propose an alternative or ask how to proceed.`
+
+/**
+ * What this hook is being asked about, in the one shape the rest of the gate
+ * reads.
+ *
+ * Cursor sends a different payload per event and the gate used to know only one
+ * of them: it read `input.command`, called everything "Bash", and any event that
+ * was not a shell execution fell out at the empty-command guard as `ask`. That
+ * was correct while `beforeShellExecution` was the only thing registered.
+ *
+ * Returns null when there is nothing to gate, which the caller answers with
+ * Cursor's own prompt.
+ */
+const describeRequest = (input) => {
+  const event = typeof input.hook_event_name === 'string' ? input.hook_event_name : ''
+
+  if (event === 'beforeMCPExecution') {
+    const tool = typeof input.tool_name === 'string' ? input.tool_name.trim() : ''
+    if (!tool) return null
+    const server = typeof input.mcp_server_name === 'string' ? input.mcp_server_name.trim() : ''
+    // `mcp__<server>__<tool>`, the same spelling Claude Code uses and the one
+    // `validateToolPattern` accepts, so a policy someone wrote once matches the
+    // same tool whichever agent called it. That portability is the only reason
+    // the policy engine is server-side.
+    const toolName = server ? `mcp__${server}__${tool}` : `mcp__${tool}`
+
+    // Never gate Pushary's own MCP tools. Asking Pushary to approve Pushary's
+    // ask_user call deadlocks: the approval cannot be delivered until the call
+    // it is gating goes through. The Claude hook carries the same guard, where
+    // it is a precaution because the matcher does not route these there. Here it
+    // is load-bearing: `beforeMCPExecution` is registered with NO matcher, so
+    // every MCP call reaches this gate, ours included.
+    if (toolName.startsWith('mcp__pushary__')) return null
+
+    const params = typeof input.tool_input === 'string'
+      ? input.tool_input
+      : input.tool_input === undefined ? '' : JSON.stringify(input.tool_input)
+    return {
+      toolName,
+      toolInputs: [{ tool: toolName, params }],
+      display: params ? `${toolName}\n${params}` : toolName,
+      toolTarget: toolName.slice(0, 120),
+      prompt: 'Allow this tool call?',
+      verb: 'call this tool',
+      denied: denialFor('tool call'),
+    }
+  }
+
+  // Shell is also the fallback for a payload with no event name: a `command` is
+  // what `beforeShellExecution` has always been recognised by, and an older
+  // Cursor that omits `hook_event_name` must keep working exactly as before.
+  const command = typeof input.command === 'string' ? input.command.trim() : ''
+  if (!command || (event && event !== 'beforeShellExecution')) return null
+  return {
+    toolName: 'Bash',
+    toolInputs: [{ command }],
+    display: command,
+    toolTarget: commandHead(command),
+    prompt: 'Allow this command?',
+    verb: 'run this',
+    denied: denialFor('command'),
+  }
+}
 
 // push_only: wait up to the policy timeout, then apply the timeout action.
-const handlePushOnly = async (apiKey, command, project, ident, timeoutSeconds, timeoutAction) => {
+const handlePushOnly = async (apiKey, request, project, ident, timeoutSeconds, timeoutAction) => {
   let asked
   try {
-    asked = await withRetry(() => callTool(apiKey, 'ask_user', askArgs(command, project, ident)), 3)
+    asked = await withRetry(() => callTool(apiKey, 'ask_user', askArgs(request, project, ident)), 3)
   } catch {
     return fromTimeoutAction(timeoutAction, 'Push notification failed; denied per your Pushary policy.')
   }
   if (!asked?.correlationId) return ask()
 
-  const realMs = Math.max(timeoutSeconds, 1) * 1000
+  if (handedOff(asked)) {
+    const late = await withdraw(apiKey, asked.correlationId)
+    if (late.answered) return fromAnswer(late, request.denied)
+    return ask(handoffMessage(asked))
+  }
+  if (asked.noDevices) {
+    const late = await withdraw(apiKey, asked.correlationId)
+    if (late.answered) return fromAnswer(late, request.denied)
+    return fromTimeoutAction(timeoutAction, 'No device connected to approve on; denied per your Pushary policy.')
+  }
+
+  const realMs = timeoutAction === 'wait' ? MAX_BLOCK_MS : Math.max(timeoutSeconds, 1) * 1000
   const cap = Math.min(realMs, MAX_BLOCK_MS)
   const answer = await pollForAnswer(apiKey, asked.correlationId, Date.now() + cap)
-  if (answer.answered) return answer.value === 'yes' ? ALLOW : deny(DENIED)
+  if (answer.answered) return fromAnswer(answer, request.denied)
+
+  const late = await withdraw(apiKey, asked.correlationId)
+  if (late.answered) return fromAnswer(late, request.denied)
 
   // If Cursor's hook limit cut us off before the configured timeout, hand off to
   // Cursor's own prompt rather than misapplying the policy's timeout action.
@@ -398,27 +506,41 @@ const handlePushOnly = async (apiKey, command, project, ident, timeoutSeconds, t
 }
 
 // push_first: race the push for a short window, then fall back to Cursor's prompt.
-const handlePushFirst = async (apiKey, command, project, ident, pushFirstSeconds) => {
+const handlePushFirst = async (apiKey, request, project, ident, pushFirstSeconds) => {
   let asked
   try {
-    asked = await withRetry(() => callTool(apiKey, 'ask_user', askArgs(command, project, ident)), 3)
+    asked = await withRetry(() => callTool(apiKey, 'ask_user', askArgs(request, project, ident)), 3)
   } catch {
     return ask()
   }
   if (!asked?.correlationId) return ask()
 
+  if (handedOff(asked)) {
+    const late = await withdraw(apiKey, asked.correlationId)
+    if (late.answered) return fromAnswer(late, request.denied)
+    return ask(handoffMessage(asked))
+  }
+  if (asked.noDevices) {
+    const late = await withdraw(apiKey, asked.correlationId)
+    if (late.answered) return fromAnswer(late, request.denied)
+    return ask('No device connected, approve here.')
+  }
+
   const cap = Math.min(Math.max(pushFirstSeconds, 1) * 1000, MAX_BLOCK_MS)
   const answer = await pollForAnswer(apiKey, asked.correlationId, Date.now() + cap)
-  if (answer.answered) return answer.value === 'yes' ? ALLOW : deny(DENIED)
-  return ask('Sent to your phone via Pushary — you can also approve here.')
+  if (answer.answered) return fromAnswer(answer, request.denied)
+
+  const late = await withdraw(apiKey, asked.correlationId)
+  if (late.answered) return fromAnswer(late, request.denied)
+  return ask('No answer from your phone in time, so the request was withdrawn there. Approve here.')
 }
 
 // notify_only: fire an awareness notification, let Cursor's prompt decide.
-const handleNotifyOnly = async (apiKey, command, project, ident) => {
+const handleNotifyOnly = async (apiKey, request, project, ident) => {
   try {
     await callTool(apiKey, 'send_notification', {
       title: 'Agent needs approval',
-      body: redactSecrets(command).slice(0, 180),
+      body: redactSecrets(request.display).slice(0, 180),
       agentName: ident.agentName,
       sessionId: ident.sessionId,
       machineId: ident.machineId,
@@ -436,8 +558,8 @@ const main = async () => {
     return respond(ask())
   }
 
-  const command = typeof input.command === 'string' ? input.command.trim() : ''
-  if (!command) return respond(ask())
+  const request = describeRequest(input)
+  if (!request) return respond(ask())
 
   const apiKey = resolveApiKey()
   if (!apiKey) {
@@ -451,7 +573,7 @@ const main = async () => {
   const ident = { agentName: `Cursor - ${project}`, sessionId, machineId: getMachineId() }
 
   try {
-    const verdict = await decide(apiKey, command, input.cwd, sessionId)
+    const verdict = await decide(apiKey, request, input.cwd, sessionId)
 
     // No verdict, or one that says nothing: Cursor's own prompt decides, exactly
     // as if this gate were not installed. Never a forced denial on an outage.
@@ -467,12 +589,12 @@ const main = async () => {
       case 'terminal_only':
         return respond(ask())
       case 'notify_only':
-        return respond(await handleNotifyOnly(apiKey, command, project, ident))
+        return respond(await handleNotifyOnly(apiKey, request, project, ident))
       case 'push_only':
-        return respond(await handlePushOnly(apiKey, command, project, ident, tool.timeoutSeconds, tool.timeoutAction))
+        return respond(await handlePushOnly(apiKey, request, project, ident, tool.timeoutSeconds, tool.timeoutAction))
       case 'push_first':
       default:
-        return respond(await handlePushFirst(apiKey, command, project, ident, tool.pushFirstSeconds))
+        return respond(await handlePushFirst(apiKey, request, project, ident, tool.pushFirstSeconds))
     }
   } catch (error) {
     process.stderr.write(`[pushary-gate] ${error?.message ?? error}\n`)
@@ -482,7 +604,7 @@ const main = async () => {
 
 // Exported for scripts/pushary-gate.test.mjs. main() only runs when the gate is
 // executed directly, so importing this file for a test does not read stdin.
-export { normalizeRepoRemote, deriveRepoKey }
+export { normalizeRepoRemote, deriveRepoKey, describeRequest, handlePushOnly, handlePushFirst, withdraw }
 
 const isDirectRun = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 if (!isDirectRun) {
