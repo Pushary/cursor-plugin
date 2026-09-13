@@ -1,40 +1,14 @@
 #!/usr/bin/env node
-// Pushary gate — Cursor `beforeShellExecution` and `beforeMCPExecution` hooks.
-//
-// Routes risky shell commands through your Pushary permission policy before they
-// run. Which commands reach this gate is the `matcher` in ../hooks/hooks.json; what
-// HAPPENS to a matched command is decided by your dashboard policy (the same policy
-// the @pushary/agent-hooks CLI uses for Claude Code), so behavior is consistent
-// across agents.
-//
-// It honors, per tool ("Bash"): auto-approve, the four approval modes
-// (push_only / push_first / notify_only / terminal_only), the timeout action
-// (approve / deny / escalate), a live mode override, and the kill switch — all
-// scoped to the Cursor conversation. Policy is cached in the temp dir for 5 minutes
-// with a stale-fallback, and requests retry.
-//
-// Self-contained: no dependencies, uses the global fetch (Node 18+).
-//
-// Contract (https://cursor.com/docs/hooks):
-//   stdin  : { "hook_event_name": string, "cwd": string, "conversation_id": string, ... }
-//            beforeShellExecution adds { "command": string }
-//            beforeMCPExecution   adds { "tool_name", "tool_input", "mcp_server_name" }
-//   stdout : { "permission": "allow" | "deny" | "ask", "user_message"?, "agent_message"? }
-//
-// Failure model: every handled path writes a decision and exits 0. Network/parse
-// errors and no-policy fall back to "ask" (Cursor's own prompt) — it never silently
-// allows a risky command. A 55s hard guard guarantees a decision before the hook's
-// `failClosed` deadline; only a catastrophic crash (e.g. Node missing) leaves no
-// output, in which case `failClosed: true` blocks the command rather than allowing
-// it unapproved.
+// Pushary Cursor hooks: server policy, fenced phone approvals, and lifecycle telemetry.
+// Dependency-free for marketplace installs. Regenerate agent-hooks/data after edits.
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const BASE_URL = 'https://pushary.com'
+const BASE_URL = process.env.PUSHARY_BASE_URL?.trim() || 'https://pushary.com'
 const MCP_URL = `${BASE_URL}/api/mcp/mcp`
 const MAX_BLOCK_MS = 45_000 // longest we can wait before Cursor's hook timeout
 const WAIT_CHUNK_MS = 20_000 // per wait_for_answer long-poll
@@ -45,9 +19,11 @@ const HARD_GUARD_MS = 55_000 // force a graceful "ask" before failClosed (60s) f
 
 // ── Cursor decisions ──────────────────────────────────────────────────────────
 const ALLOW = { permission: 'allow' }
-const ask = (agentMessage) => (agentMessage ? { permission: 'ask', agent_message: agentMessage } : { permission: 'ask' })
+let genericToolHook = false
+const ask = (agentMessage) => genericToolHook ? deny(agentMessage ?? 'Approval requires a user decision. Ask through Pushary, then retry.') : (agentMessage ? { permission: 'ask', agent_message: agentMessage } : { permission: 'ask' })
 const deny = (agentMessage) => ({ permission: 'deny', user_message: 'Command denied via Pushary.', agent_message: agentMessage })
 
+let activeQuestion
 let done = false
 const respond = (decision) => {
   if (done) return
@@ -55,10 +31,6 @@ const respond = (decision) => {
   process.stdout.write(JSON.stringify(decision))
   process.exit(0)
 }
-
-// Backstop: if anything hangs, return "ask" rather than letting the hook time out
-// (which, with failClosed, would block the command).
-setTimeout(() => respond(ask()), HARD_GUARD_MS).unref()
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const clamp = (n, lo, hi) => Math.min(Math.max(n, lo), hi)
@@ -355,6 +327,7 @@ const askArgs = (request, project, ident) => ({
   toolTarget: request.toolTarget,
   actionBody: deriveActionBody(request.display),
   wait: false,
+  waitEndsAt: new Date(Date.now() + MAX_BLOCK_MS).toISOString(),
 })
 
 const pollForAnswer = async (apiKey, correlationId, deadlineMs) => {
@@ -362,14 +335,12 @@ const pollForAnswer = async (apiKey, correlationId, deadlineMs) => {
     const remaining = clamp(deadlineMs - Date.now(), 1_000, WAIT_CHUNK_MS)
     try {
       const answer = await callTool(apiKey, 'wait_for_answer', { correlationId, timeoutMs: remaining })
-      if (answer?.answered) return answer
+      if (answer?.error) return STOPPED
+      if (answer?.answered || stopped(answer) || (answer?.status && answer.status !== 'pending')) return answer
     } catch {
-      if (Date.now() + POLL_GAP_MS >= deadlineMs) break
-      await sleep(POLL_GAP_MS)
-      continue
+      return { answered: false, handoffAction: 'stop' }
     }
-    if (Date.now() + POLL_GAP_MS >= deadlineMs) break
-    await sleep(POLL_GAP_MS)
+    await sleep(Math.min(POLL_GAP_MS, Math.max(0, deadlineMs - Date.now())))
   }
   return { answered: false }
 }
@@ -377,25 +348,29 @@ const pollForAnswer = async (apiKey, correlationId, deadlineMs) => {
 const fromTimeoutAction = (action, deniedReason) =>
   action === 'approve' ? ALLOW : action === 'deny' ? deny(deniedReason) : ask()
 
-const fromAnswer = (answer, deniedReason) => {
+const fromAnswer = (answer, deniedReason = 'Denied via Pushary.') => {
+  activeQuestion = undefined
   if (answer.value === 'defer') return ask()
   return answer.value === 'yes' ? ALLOW : deny(deniedReason)
 }
 
+const stopped = (result) => result?.handoffAction === 'stop'
+  || ['cancelled', 'unavailable', 'stopped', 'missing'].includes(result?.status)
+const STOPPED = { answered: false, handoffAction: 'stop' }
+const STOP_REASON = 'This approval was cancelled or its state could not be verified. Do not run the action; wait for a new user instruction.'
+
 const withdraw = async (apiKey, correlationId) => {
-  const unanswered = { answered: false }
-  let cancelled
   try {
-    cancelled = await callTool(apiKey, 'cancel_question', { correlationId }, WITHDRAW_TIMEOUT_MS)
-  } catch {
-    return unanswered
-  }
-  if (cancelled?.cancelled !== false || cancelled?.status === 'unavailable') return unanswered
-  try {
+    const cancelled = await callTool(apiKey, 'cancel_question', { correlationId }, WITHDRAW_TIMEOUT_MS)
+    if (stopped(cancelled)) return STOPPED
+    if (cancelled?.cancelled === true) return { answered: false }
     const answer = await callTool(apiKey, 'wait_for_answer', { correlationId, timeoutMs: 1_000 }, WITHDRAW_TIMEOUT_MS)
-    return answer?.answered ? answer : unanswered
+    if (answer?.answered) return answer
+    return ['expired', 'missing'].includes(answer?.status) ? { answered: false } : STOPPED
   } catch {
-    return unanswered
+    return STOPPED
+  } finally {
+    activeQuestion = undefined
   }
 }
 
@@ -416,11 +391,20 @@ const denialFor = (noun) =>
  * was not a shell execution fell out at the empty-command guard as `ask`. That
  * was correct while `beforeShellExecution` was the only thing registered.
  *
- * Returns null when there is nothing to gate, which the caller answers with
- * Cursor's own prompt.
+ * Returns null for events and tools handled elsewhere.
  */
 const describeRequest = (input) => {
   const event = typeof input.hook_event_name === 'string' ? input.hook_event_name : ''
+
+  if (event === 'preToolUse') {
+    // Shell and MCP have their own gate events; never ask twice.
+    if (!['Write', 'Delete', 'Edit'].includes(input.tool_name)) return null
+    const params = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {}
+    const display = `${input.tool_name}\n${JSON.stringify(params)}`
+    return { toolName: input.tool_name, toolInputs: [params], display,
+      toolTarget: String(params.file_path ?? params.path ?? '').slice(0, 120),
+      prompt: 'Allow this file change?', verb: 'change this file', denied: denialFor('file change') }
+  }
 
   if (event === 'beforeMCPExecution') {
     const tool = typeof input.tool_name === 'string' ? input.tool_name.trim() : ''
@@ -473,64 +457,88 @@ const describeRequest = (input) => {
 // push_only: wait up to the policy timeout, then apply the timeout action.
 const handlePushOnly = async (apiKey, request, project, ident, timeoutSeconds, timeoutAction) => {
   let asked
+  const args = { ...askArgs(request, project, ident), requestId: randomUUID() }
   try {
-    asked = await withRetry(() => callTool(apiKey, 'ask_user', askArgs(request, project, ident)), 3)
+    asked = await withRetry(() => callTool(apiKey, 'ask_user', args), 3)
   } catch {
-    return fromTimeoutAction(timeoutAction, 'Push notification failed; denied per your Pushary policy.')
+    return deny('Pushary could not create a verifiable approval. Retry the action.')
   }
-  if (!asked?.correlationId) return ask()
+  if (stopped(asked)) return deny(STOP_REASON)
+  if (asked?.answered) return fromAnswer(asked)
+  if (!asked?.correlationId) return deny('Pushary did not return a verifiable approval.')
+  activeQuestion = { apiKey, correlationId: asked.correlationId }
 
   if (handedOff(asked)) {
     const late = await withdraw(apiKey, asked.correlationId)
+    if (stopped(late)) return deny(STOP_REASON)
     if (late.answered) return fromAnswer(late, request.denied)
     return ask(handoffMessage(asked))
   }
   if (asked.noDevices) {
     const late = await withdraw(apiKey, asked.correlationId)
+    if (stopped(late)) return deny(STOP_REASON)
     if (late.answered) return fromAnswer(late, request.denied)
-    return fromTimeoutAction(timeoutAction, 'No device connected to approve on; denied per your Pushary policy.')
+    return ask('No device connected, approve here.')
   }
 
   const realMs = timeoutAction === 'wait' ? MAX_BLOCK_MS : Math.max(timeoutSeconds, 1) * 1000
   const cap = Math.min(realMs, MAX_BLOCK_MS)
-  const answer = await pollForAnswer(apiKey, asked.correlationId, Date.now() + cap)
+  const deadline = Date.now() + cap
+  const answer = await pollForAnswer(apiKey, asked.correlationId, deadline)
+  if (stopped(answer)) {
+    await withdraw(apiKey, asked.correlationId)
+    return deny(STOP_REASON)
+  }
   if (answer.answered) return fromAnswer(answer, request.denied)
 
   const late = await withdraw(apiKey, asked.correlationId)
+  if (stopped(late)) return deny(STOP_REASON)
   if (late.answered) return fromAnswer(late, request.denied)
 
   // If Cursor's hook limit cut us off before the configured timeout, hand off to
   // Cursor's own prompt rather than misapplying the policy's timeout action.
-  if (cap >= realMs) return fromTimeoutAction(timeoutAction, 'No response within the approval timeout; denied per your Pushary policy.')
+  if (cap >= realMs && Date.now() >= deadline) return fromTimeoutAction(timeoutAction, 'No response within the approval timeout; denied per your Pushary policy.')
   return ask()
 }
 
 // push_first: race the push for a short window, then fall back to Cursor's prompt.
 const handlePushFirst = async (apiKey, request, project, ident, pushFirstSeconds) => {
   let asked
+  const args = { ...askArgs(request, project, ident), requestId: randomUUID() }
   try {
-    asked = await withRetry(() => callTool(apiKey, 'ask_user', askArgs(request, project, ident)), 3)
+    asked = await withRetry(() => callTool(apiKey, 'ask_user', args), 3)
   } catch {
-    return ask()
+    return deny('Pushary could not create a verifiable approval. Retry the action.')
   }
-  if (!asked?.correlationId) return ask()
+  if (stopped(asked)) return deny(STOP_REASON)
+  if (asked?.answered) return fromAnswer(asked)
+  if (!asked?.correlationId) return deny('Pushary did not return a verifiable approval.')
+  activeQuestion = { apiKey, correlationId: asked.correlationId }
 
   if (handedOff(asked)) {
     const late = await withdraw(apiKey, asked.correlationId)
+    if (stopped(late)) return deny(STOP_REASON)
     if (late.answered) return fromAnswer(late, request.denied)
     return ask(handoffMessage(asked))
   }
   if (asked.noDevices) {
     const late = await withdraw(apiKey, asked.correlationId)
+    if (stopped(late)) return deny(STOP_REASON)
     if (late.answered) return fromAnswer(late, request.denied)
     return ask('No device connected, approve here.')
   }
 
   const cap = Math.min(Math.max(pushFirstSeconds, 1) * 1000, MAX_BLOCK_MS)
-  const answer = await pollForAnswer(apiKey, asked.correlationId, Date.now() + cap)
+  const deadline = Date.now() + cap
+  const answer = await pollForAnswer(apiKey, asked.correlationId, deadline)
+  if (stopped(answer)) {
+    await withdraw(apiKey, asked.correlationId)
+    return deny(STOP_REASON)
+  }
   if (answer.answered) return fromAnswer(answer, request.denied)
 
   const late = await withdraw(apiKey, asked.correlationId)
+  if (stopped(late)) return deny(STOP_REASON)
   if (late.answered) return fromAnswer(late, request.denied)
   return ask('No answer from your phone in time, so the request was withdrawn there. Approve here.')
 }
@@ -549,17 +557,56 @@ const handleNotifyOnly = async (apiKey, request, project, ident) => {
   return ask()
 }
 
+const TELEMETRY_EVENTS = ["postToolUse", "stop", "sessionStart", "sessionEnd", "beforeSubmitPrompt", "preCompact", "subagentStart", "subagentStop"]
+
+const reportTelemetry = async (input, source) => {
+  const apiKey = resolveApiKey()
+  if (!apiKey) return
+  const sentAt = new Date().toISOString()
+  const payload = JSON.stringify(input, (_key, value) => typeof value === 'string' ? redactSecretsDeep(value) : value)
+  if (Buffer.byteLength(payload) > 262144) return
+  const hash = value => createHash('sha256').update(value).digest('hex')
+  const sessionId = input.session_id ?? input.sessionId ?? input.conversation_id ?? ''
+  const hookId = hash([source, sessionId, input.hook_event_name, sentAt, hash(payload)].join('|')).slice(0, 32)
+  try {
+    await fetch(`${BASE_URL}/api/agent/hook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ v: 1, machineId: getMachineId(), app: { platform: 'cli', version: 'editor-plugin' },
+        envelopes: [{ wire: 1, hookId, source, event: input.hook_event_name, sentAt,
+          cwd: input.cwd, repoKey: deriveRepoKey(input.cwd), payload }] }),
+      signal: AbortSignal.timeout(5000),
+    })
+  } catch { /* Telemetry never blocks an agent. */ }
+}
+
 const main = async () => {
+  // Backstop: if anything hangs, return "ask" rather than letting the hook time out
+// (which, with failClosed, would block the command).
+setTimeout(async () => {
+    if (!activeQuestion) return respond(deny('Pushary could not finish approval safely. Retry the action.'))
+    const late = await withdraw(activeQuestion.apiKey, activeQuestion.correlationId)
+    respond(late.answered ? fromAnswer(late) : deny('Pushary approval expired or could not be withdrawn safely. Retry the action.'))
+  }, HARD_GUARD_MS - 5_000).unref()
+
+
   let input
   try {
     const raw = await readStdin()
     input = raw.trim() ? JSON.parse(raw) : {}
   } catch {
-    return respond(ask())
+    return respond(deny('Pushary received invalid hook input. Retry the action.'))
   }
 
+  input.hook_event_name ??= input.hookEventName
+  if (TELEMETRY_EVENTS.includes(input.hook_event_name)) {
+    await reportTelemetry(input, 'cursor')
+    return respond({})
+  }
+
+  genericToolHook = input.hook_event_name === 'preToolUse'
   const request = describeRequest(input)
-  if (!request) return respond(ask())
+  if (!request) return respond({})
 
   const apiKey = resolveApiKey()
   if (!apiKey) {
@@ -575,8 +622,7 @@ const main = async () => {
   try {
     const verdict = await decide(apiKey, request, input.cwd, sessionId)
 
-    // No verdict, or one that says nothing: Cursor's own prompt decides, exactly
-    // as if this gate were not installed. Never a forced denial on an outage.
+    // Native shell/MCP prompts can take over; generic file hooks must deny ask.
     if (!verdict || verdict.kind === 'no_opinion') return respond(ask())
     if (verdict.kind === 'kill') return respond(deny(verdict.reason))
     if (verdict.kind === 'allow') return respond(ALLOW)

@@ -18,9 +18,9 @@ There are three things.
 
 1. Notify. The agent sends a push when a long task finishes, or when a build, test, or deploy fails. The push can include what changed, the error, and suggested next steps.
 
-2. Ask. The agent asks you questions through push: yes or no, multiple choice, or free text. It waits for your answer. When Pushary is connected, the agent sends its questions to your phone instead of waiting in the editor.
+2. Ask. The agent asks you questions through push: yes or no, multiple choice, or free text. It waits for your answer. The bundled instructions guide the agent to use Pushary for questions. Native editor question dialogs are not automatically intercepted.
 
-3. Gate. Risky shell commands (like rm, force push, history rewrites, database drops, deploys, and systemctl) are checked before they run. What happens is set by your Pushary dashboard policy: auto approve trusted commands, push to your phone for approval, or just notify. If you do not answer in time, it falls back to Cursor's own prompt, so nothing dangerous runs silently. If the check cannot run at all, the command is blocked instead of allowed.
+3. Gate. Shell commands, file writes/edits/deletes, and third-party MCP calls reach your Pushary policy before execution. The policy can approve, deny, or wait for your answer. Cancelled or unverifiable decisions stop the action. Cursor’s generic file-tool hook does not enforce `ask`, so a file action without a completed approval is denied; shell/MCP hooks can hand off to Cursor’s prompt.
 
 ## Install
 
@@ -54,7 +54,7 @@ Add this to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` for ever
 }
 ```
 
-However you install it, Pushary talks to the same server, so the plugin and the CLI give you the same setup.
+The plugin and CLI installer use the same decision service. Manual MCP-only configuration provides questions and notifications, but does not install approval or activity hooks.
 
 ## Set your API key
 
@@ -78,16 +78,14 @@ macOS GUI apps do not read `.zshrc`. If Settings > MCP shows pushary in red afte
 | MCP server | `mcp.json` | Connects Cursor to the Pushary tools: `send_notification`, `ask_user`, `wait_for_answer`, `cancel_question`, `list_sessions` |
 | Rule | `rules/pushary.mdc` | Always on guidance so the agent uses Pushary on its own |
 | Skill | `skills/pushary/SKILL.md` | Full tool reference: parameters, examples, return values |
-| Hook | `hooks/hooks.json` and `scripts/pushary-gate.mjs` | Sends risky commands to your phone for approval |
+| Hook | `hooks/hooks.json` and `scripts/pushary-gate.mjs` | Evaluates tool approvals and reports session/tool activity |
 | Commands | `commands/` | `/pushary-test` and `/notify-when-done` |
 
 ## How the gate decides
 
-There are two layers.
+The hooks register the supported execution boundaries; your dashboard policy decides which actions need approval. No shell-command regex hides a tool from policy evaluation. Lifecycle hooks report session starts, turn completion, tool results, compaction, and subagent activity.
 
-1. The matcher in `hooks/hooks.json` is a list of patterns that decides which commands get checked at all. Edit it to add or remove patterns.
-
-2. Your Pushary dashboard policy decides what happens to a checked command, per tool: auto approve, the approval mode (push and wait, push then prompt, notify only, or prompt only), the timeout action, a live mode override, and the kill switch. This is the same policy your other Pushary agents use, so the behavior stays the same across agents.
+Timeout approvals apply only after the configured wait actually elapsed. Short editor hook budgets can end a wait earlier; cancellation is attempted before handoff. An uncertain cancellation denies the action. Local plugin installation does not install hooks into remote or cloud agent environments.
 
 ## Commands
 

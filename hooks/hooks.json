@@ -4,7 +4,6 @@
     "beforeShellExecution": [
       {
         "command": "node ./scripts/pushary-gate.mjs",
-        "matcher": "\\brm\\b|\\brmdir\\b|\\bunlink\\b|\\bmkfs|\\bdd\\b|\\bshutdown\\b|\\breboot\\b|\\bpkill\\b|\\bkillall\\b|\\bsystemctl\\b|--force\\b|force-push|reset --hard|\\brebase\\b|\\bdrop\\b|\\bDROP\\b|\\btruncate\\b|\\bTRUNCATE\\b|delete from|DELETE FROM|\\bdeploy\\b|\\bpublish\\b|\\brelease\\b|\\bmigrate\\b",
         "timeout": 60,
         "failClosed": true
       }
@@ -14,6 +13,62 @@
         "command": "node ./scripts/pushary-gate.mjs",
         "timeout": 60,
         "failClosed": true
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "matcher": "Write|Delete|Edit",
+        "timeout": 60,
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 10
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 10
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 10
+      }
+    ],
+    "subagentStop": [
+      {
+        "command": "node ./scripts/pushary-gate.mjs",
+        "timeout": 10
       }
     ]
   }
