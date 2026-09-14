@@ -22,6 +22,9 @@ const ALLOW = { permission: 'allow' }
 let genericToolHook = false
 const ask = (agentMessage) => genericToolHook ? deny(agentMessage ?? 'Approval requires a user decision. Ask through Pushary, then retry.') : (agentMessage ? { permission: 'ask', agent_message: agentMessage } : { permission: 'ask' })
 const deny = (agentMessage) => ({ permission: 'deny', user_message: 'Command denied via Pushary.', agent_message: agentMessage })
+const unresolved = (verdict) => genericToolHook && verdict?.reason === 'not_gated'
+  ? ALLOW
+  : ask(genericToolHook ? 'Pushary could not reach a verdict for this change. Retry shortly.' : undefined)
 
 let activeQuestion
 let done = false
@@ -623,7 +626,7 @@ setTimeout(async () => {
     const verdict = await decide(apiKey, request, input.cwd, sessionId)
 
     // Native shell/MCP prompts can take over; generic file hooks must deny ask.
-    if (!verdict || verdict.kind === 'no_opinion') return respond(ask())
+    if (!verdict || verdict.kind === 'no_opinion') return respond(unresolved(verdict))
     if (verdict.kind === 'kill') return respond(deny(verdict.reason))
     if (verdict.kind === 'allow') return respond(ALLOW)
     if (verdict.kind === 'deny') return respond(deny(verdict.reason))
@@ -644,7 +647,7 @@ setTimeout(async () => {
     }
   } catch (error) {
     process.stderr.write(`[pushary-gate] ${error?.message ?? error}\n`)
-    return respond(ask())
+    return respond(unresolved(null))
   }
 }
 

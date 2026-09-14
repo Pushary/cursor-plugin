@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Allow file edits when the server explicitly says the action is not gated.
+- Keep unresolved file checks denied with an accurate retry message, while shell/MCP hooks retain the native prompt.
+
 ## 0.2.0
 
 The gate stopped carrying its own copy of the policy engine.

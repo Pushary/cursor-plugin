@@ -20,7 +20,7 @@ There are three things.
 
 2. Ask. The agent asks you questions through push: yes or no, multiple choice, or free text. It waits for your answer. The bundled instructions guide the agent to use Pushary for questions. Native editor question dialogs are not automatically intercepted.
 
-3. Gate. Shell commands, file writes/edits/deletes, and third-party MCP calls reach your Pushary policy before execution. The policy can approve, deny, or wait for your answer. Cancelled or unverifiable decisions stop the action. Cursor’s generic file-tool hook does not enforce `ask`, so a file action without a completed approval is denied; shell/MCP hooks can hand off to Cursor’s prompt.
+3. Gate. Shell commands, file writes/edits/deletes, and third-party MCP calls reach your Pushary policy before execution. The policy can approve, deny, or wait for your answer. Cancelled or unverifiable decisions stop the action. Cursor’s generic file-tool hook does not enforce `ask`, so an unresolved file action is denied. File actions explicitly marked `not_gated` by the server proceed; shell/MCP hooks can hand off to Cursor’s prompt.
 
 ## Install
 
