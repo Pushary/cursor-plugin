@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3
+
+- Updates and Terminal hand an approval back to Cursor promptly. The gate no longer waits for a phone answer that Updates never asks for, and it withdraws the phone question before Cursor decides. An answer that arrives in that moment still counts.
+- A file change that goes back to the agent's own permissions is refused with the reason, because Cursor file hooks cannot show a local approval. Choose Every time for file changes you want to approve from your phone.
+- With no phone or other notification channel connected, a file change is refused with a message that says so. Shell commands and MCP calls still open Cursor's own prompt with "No device connected, approve here."
+- Approval questions carry the repository and the tool name the gate judged, so routing and repository rules apply to the question as they did to the gate. A file change is asked about with its full path, so path rules and routing match it. A path longer than 80 characters falls back to the file type instead of making the question fail.
+
 ## 0.2.2
 
 - Allow file edits when the server explicitly says the action is not gated.

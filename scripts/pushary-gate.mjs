@@ -5,7 +5,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
 import { existsSync, readFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const BASE_URL = process.env.PUSHARY_BASE_URL?.trim() || 'https://pushary.com'
@@ -22,6 +22,13 @@ const ALLOW = { permission: 'allow' }
 let genericToolHook = false
 const ask = (agentMessage) => genericToolHook ? deny(agentMessage ?? 'Approval requires a user decision. Ask through Pushary, then retry.') : (agentMessage ? { permission: 'ask', agent_message: agentMessage } : { permission: 'ask' })
 const deny = (agentMessage) => ({ permission: 'deny', user_message: 'Command denied via Pushary.', agent_message: agentMessage })
+// A quiet handoff returns to the agent's permissions, but a file hook has no
+// local prompt to return to. Retrying cannot help, so say why. Same text as the gate route.
+const QUIET_FILE_HOOK_REASON = 'This Cursor file hook cannot show a local approval. Switch to Every time for this action.'
+const handBack = (agentMessage) => genericToolHook ? deny(QUIET_FILE_HOOK_REASON) : ask(agentMessage)
+// No channel can reach anyone, and a file hook has no local prompt to fall back to either.
+const NO_DEVICE_FILE_HOOK_REASON = 'No phone or other notification channel is connected to Pushary, and this Cursor file hook cannot show a local approval. Connect one in Pushary, then retry.'
+const noDevice = () => genericToolHook ? deny(NO_DEVICE_FILE_HOOK_REASON) : ask('No device connected, approve here.')
 const unresolved = (verdict) => genericToolHook && verdict?.reason === 'not_gated'
   ? ALLOW
   : ask(genericToolHook ? 'Pushary could not reach a verdict for this change. Retry shortly.' : undefined)
@@ -317,7 +324,42 @@ const deriveActionBody = (command) => capActionBody(redactSecretsDeep(command))
 // one-tap Approve on a dangerous call, and record a decision at the same grain as
 // every other agent. Without them a destructive Cursor command arrived on the
 // lock screen ungated.
-const commandHead = (command) => command.trim().split(/\s+/).slice(0, 2).join(' ').slice(0, 120)
+// ask_user accepts a target of at most 80 characters (TOOL_TARGET_MAX_LENGTH in
+// @pushary/contracts). A longer one fails the whole ask.
+const TOOL_TARGET_MAX = 80
+
+// A file change is routed and matched by its path, so the ask carries the path the
+// gate judged, resolved against cwd the way the server resolves it. A path too long
+// for ask_user is left out and the server's own target is used instead.
+const filePathTarget = (path, cwd) => {
+  if (typeof path !== 'string' || !path) return undefined
+  const full = cwd && !isAbsolute(path) ? resolve(cwd, path) : path
+  return full.length <= TOOL_TARGET_MAX ? full : undefined
+}
+
+// ask_user takes toolPath as an absolute POSIX path of at most 4096 characters and
+// rejects the whole ask for anything else.
+const TOOL_PATH_MAX = 4096
+
+// The exact path, so routing and path rules still match a file whose path is too
+// long for toolTarget. Sent only when it is an absolute POSIX path: a relative path
+// with no absolute cwd, or a Windows path, is left out rather than failing the ask.
+const filePathForAsk = (path, cwd) => {
+  if (typeof path !== 'string' || !path) return undefined
+  if (/^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\')) return undefined
+  const full = path.startsWith('/') ? path
+    : typeof cwd === 'string' && cwd.startsWith('/') ? posix.resolve(cwd, path) : undefined
+  return full && full.length <= TOOL_PATH_MAX ? full : undefined
+}
+
+// The canonical tool and target from a gate verdict, taken by name. Anything else a
+// server adds to questionContext must never overwrite what this gate asks with.
+const canonicalQuestion = (context) => ({
+  toolName: typeof context?.toolName === 'string' && context.toolName ? context.toolName : undefined,
+  toolTarget: typeof context?.toolTarget === 'string' && context.toolTarget ? context.toolTarget : undefined,
+})
+
+const commandHead = (command) => command.trim().split(/\s+/).slice(0, 2).join(' ').slice(0, TOOL_TARGET_MAX)
 
 const askArgs = (request, project, ident) => ({
   question: `${request.prompt}\n\n${redactSecrets(request.display)}`,
@@ -326,8 +368,10 @@ const askArgs = (request, project, ident) => ({
   agentName: ident.agentName,
   sessionId: ident.sessionId,
   machineId: ident.machineId,
+  repoKey: ident.repoKey,
   toolName: request.toolName,
   toolTarget: request.toolTarget,
+  ...(request.toolPath ? { toolPath: request.toolPath } : {}),
   actionBody: deriveActionBody(request.display),
   wait: false,
   waitEndsAt: new Date(Date.now() + MAX_BLOCK_MS).toISOString(),
@@ -377,10 +421,11 @@ const withdraw = async (apiKey, correlationId) => {
   }
 }
 
-const handedOff = (asked) => asked.suppressed || asked.status === 'terminal'
+const handedOff = (asked) => asked.suppressed || asked.status === 'terminal' || asked.status === 'notified'
+  || asked.handoffAction === 'cancel_then_ask_in_current_client'
 
 const handoffMessage = (asked) =>
-  asked.suppressed ? 'You are at the keyboard, approve here.' : 'Delivery mode is Terminal, approve here.'
+  asked.suppressed ? 'You are at the keyboard, continue with the agent’s permissions.' : 'Continue with the agent’s permissions.'
 
 const denialFor = (noun) =>
   `The user denied this ${noun} via a Pushary push approval. Do not run it — propose an alternative or ask how to proceed.`
@@ -404,8 +449,10 @@ const describeRequest = (input) => {
     if (!['Write', 'Delete', 'Edit'].includes(input.tool_name)) return null
     const params = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {}
     const display = `${input.tool_name}\n${JSON.stringify(params)}`
+    const toolPath = filePathForAsk(params.file_path ?? params.path, input.cwd)
     return { toolName: input.tool_name, toolInputs: [params], display,
-      toolTarget: String(params.file_path ?? params.path ?? '').slice(0, 120),
+      toolTarget: filePathTarget(params.file_path ?? params.path, input.cwd),
+      ...(toolPath ? { toolPath } : {}),
       prompt: 'Allow this file change?', verb: 'change this file', denied: denialFor('file change') }
   }
 
@@ -434,7 +481,7 @@ const describeRequest = (input) => {
       toolName,
       toolInputs: [{ tool: toolName, params }],
       display: params ? `${toolName}\n${params}` : toolName,
-      toolTarget: toolName.slice(0, 120),
+      toolTarget: toolName.slice(0, TOOL_TARGET_MAX),
       prompt: 'Allow this tool call?',
       verb: 'call this tool',
       denied: denialFor('tool call'),
@@ -471,17 +518,19 @@ const handlePushOnly = async (apiKey, request, project, ident, timeoutSeconds, t
   if (!asked?.correlationId) return deny('Pushary did not return a verifiable approval.')
   activeQuestion = { apiKey, correlationId: asked.correlationId }
 
-  if (handedOff(asked)) {
-    const late = await withdraw(apiKey, asked.correlationId)
-    if (stopped(late)) return deny(STOP_REASON)
-    if (late.answered) return fromAnswer(late, request.denied)
-    return ask(handoffMessage(asked))
-  }
+  // No device first. The server checks for a channel before any quiet mode, and
+  // that reply carries the same handoffAction as a quiet handoff.
   if (asked.noDevices) {
     const late = await withdraw(apiKey, asked.correlationId)
     if (stopped(late)) return deny(STOP_REASON)
     if (late.answered) return fromAnswer(late, request.denied)
-    return ask('No device connected, approve here.')
+    return noDevice()
+  }
+  if (handedOff(asked)) {
+    const late = await withdraw(apiKey, asked.correlationId)
+    if (stopped(late)) return deny(STOP_REASON)
+    if (late.answered) return fromAnswer(late, request.denied)
+    return handBack(handoffMessage(asked))
   }
 
   const realMs = timeoutAction === 'wait' ? MAX_BLOCK_MS : Math.max(timeoutSeconds, 1) * 1000
@@ -518,17 +567,17 @@ const handlePushFirst = async (apiKey, request, project, ident, pushFirstSeconds
   if (!asked?.correlationId) return deny('Pushary did not return a verifiable approval.')
   activeQuestion = { apiKey, correlationId: asked.correlationId }
 
-  if (handedOff(asked)) {
-    const late = await withdraw(apiKey, asked.correlationId)
-    if (stopped(late)) return deny(STOP_REASON)
-    if (late.answered) return fromAnswer(late, request.denied)
-    return ask(handoffMessage(asked))
-  }
   if (asked.noDevices) {
     const late = await withdraw(apiKey, asked.correlationId)
     if (stopped(late)) return deny(STOP_REASON)
     if (late.answered) return fromAnswer(late, request.denied)
-    return ask('No device connected, approve here.')
+    return noDevice()
+  }
+  if (handedOff(asked)) {
+    const late = await withdraw(apiKey, asked.correlationId)
+    if (stopped(late)) return deny(STOP_REASON)
+    if (late.answered) return fromAnswer(late, request.denied)
+    return handBack(handoffMessage(asked))
   }
 
   const cap = Math.min(Math.max(pushFirstSeconds, 1) * 1000, MAX_BLOCK_MS)
@@ -557,7 +606,7 @@ const handleNotifyOnly = async (apiKey, request, project, ident) => {
       machineId: ident.machineId,
     })
   } catch {}
-  return ask()
+  return handBack()
 }
 
 const TELEMETRY_EVENTS = ["postToolUse", "stop", "sessionStart", "sessionEnd", "beforeSubmitPrompt", "preCompact", "subagentStart", "subagentStop"]
@@ -620,7 +669,7 @@ setTimeout(async () => {
 
   const project = basename(input.cwd || process.cwd()) || 'workspace'
   const sessionId = typeof input.conversation_id === 'string' ? input.conversation_id : undefined
-  const ident = { agentName: `Cursor - ${project}`, sessionId, machineId: getMachineId() }
+  const ident = { agentName: `Cursor - ${project}`, sessionId, machineId: getMachineId(), repoKey: deriveRepoKey(input.cwd) }
 
   try {
     const verdict = await decide(apiKey, request, input.cwd, sessionId)
@@ -632,11 +681,17 @@ setTimeout(async () => {
     if (verdict.kind === 'deny') return respond(deny(verdict.reason))
     if (verdict.kind !== 'ask') return respond(ask())
 
+    // Reuse the server's canonical tool and target, so asking resolves the same rules
+    // as the gate. A file change keeps its own path: the server's target for a file
+    // is only its extension, which loses what routing and path rules match on.
+    const canonical = canonicalQuestion(verdict.questionContext)
+    request.toolName = canonical.toolName ?? request.toolName
+    request.toolTarget = (genericToolHook && request.toolTarget) || canonical.toolTarget || request.toolTarget
     const tool = verdict.policy
 
     switch (tool.mode) {
       case 'terminal_only':
-        return respond(ask())
+        return respond(handBack())
       case 'notify_only':
         return respond(await handleNotifyOnly(apiKey, request, project, ident))
       case 'push_only':
