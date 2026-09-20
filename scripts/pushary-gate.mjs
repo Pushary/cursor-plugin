@@ -359,6 +359,23 @@ const canonicalQuestion = (context) => ({
   toolTarget: typeof context?.toolTarget === 'string' && context.toolTarget ? context.toolTarget : undefined,
 })
 
+// ask_user caps scopePath at SCOPE_PATH_MAX_LENGTH and blocker at
+// DECISION_LINE_MAX. The server derives a cwd-relative scope path that can be
+// longer than 200, so an over-length value must be DROPPED rather than sent:
+// ask_user rejects the whole call, this gate cannot parse the error, and the
+// action fails closed. Dropping costs only the widening on approval.
+const SCOPE_PATH_MAX = 200
+const BLOCKER_MAX = 500
+
+const withinCap = (value, cap) =>
+  typeof value === 'string' && value && value.length <= cap ? value : undefined
+
+/** The scope breach behind an ask, when the verdict says the ask exists for one. */
+const scopeFromVerdict = (verdict) => ({
+  scopePath: withinCap(verdict?.scopePath, SCOPE_PATH_MAX),
+  scopeReason: withinCap(verdict?.scopeReason, BLOCKER_MAX),
+})
+
 const commandHead = (command) => command.trim().split(/\s+/).slice(0, 2).join(' ').slice(0, TOOL_TARGET_MAX)
 
 const askArgs = (request, project, ident) => ({
@@ -372,6 +389,12 @@ const askArgs = (request, project, ident) => ({
   toolName: request.toolName,
   toolTarget: request.toolTarget,
   ...(request.toolPath ? { toolPath: request.toolPath } : {}),
+  // Carried from the verdict. Without scopePath the server cannot widen the
+  // ratified contract when the user approves, so every further file in the same
+  // area asks again; without the blocker the card never says that a boundary the
+  // user personally agreed to is the reason for asking.
+  ...(request.scopePath ? { scopePath: request.scopePath } : {}),
+  ...(request.scopeReason ? { blocker: request.scopeReason } : {}),
   actionBody: deriveActionBody(request.display),
   wait: false,
   waitEndsAt: new Date(Date.now() + MAX_BLOCK_MS).toISOString(),
@@ -687,6 +710,7 @@ setTimeout(async () => {
     const canonical = canonicalQuestion(verdict.questionContext)
     request.toolName = canonical.toolName ?? request.toolName
     request.toolTarget = (genericToolHook && request.toolTarget) || canonical.toolTarget || request.toolTarget
+    Object.assign(request, scopeFromVerdict(verdict))
     const tool = verdict.policy
 
     switch (tool.mode) {
