@@ -14,7 +14,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { describeRequest, normalizeRepoRemote } from './pushary-gate.mjs'
+import { describeRequest, normalizeRepoRemote, redactSecrets } from './pushary-gate.mjs'
 
 describe('repo identity', () => {
   it('collapses the forms of one remote', () => {
@@ -111,5 +111,27 @@ describe('what the gate was asked about', () => {
     assert.equal(describeRequest({ hook_event_name: 'beforeReadFile', file_path: '/etc/passwd' }), null)
     assert.equal(describeRequest({ hook_event_name: 'beforeMCPExecution' }), null)
     assert.equal(describeRequest({}), null)
+  })
+})
+
+describe('approval text redaction', () => {
+  it('shows a command whole when a credential name only sits next to shell syntax', () => {
+    for (const command of [
+      'echo "password=" && rm -rf ~ && echo "x"',
+      'find / -name "token:" -o -delete -o -name "x"',
+      "grep -rl foo'password=' . | xargs rm -f 'important file'",
+      'grep "authorization:";rm important-file',
+      'echo "-----BEGIN PRIVATE KEY-----" && rm -rf ~ && echo "-----END PRIVATE KEY-----"',
+      'password= reboot',
+    ]) {
+      assert.equal(redactSecrets(command), command)
+    }
+  })
+
+  it('stops a hidden value at the first space, quote or piece of shell syntax', () => {
+    assert.equal(redactSecrets('eval TOKEN="x; rm -rf ~"'), 'eval TOKEN="[redacted]; rm -rf ~"')
+    assert.equal(redactSecrets('TOKEN=abc;rm file'), 'TOKEN=[redacted];rm file')
+    assert.equal(redactSecrets('rm -rf {password=x,/}'), 'rm -rf {password=[redacted],/}')
+    assert.equal(redactSecrets('export API_KEY="abc123" && rm -rf build'), 'export API_KEY="[redacted]" && rm -rf build')
   })
 })

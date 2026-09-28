@@ -2,6 +2,7 @@
 
 ## 0.2.3
 
+- Approval text never hides part of a command. The value after a credential name is hidden only up to the first space, quote or piece of shell syntax, so `echo "password=" && rm -rf ~` and `eval TOKEN="x; rm -rf ~"` both show the `rm`. A private key block is hidden only when it holds nothing but the key.
 - Updates and Terminal hand an approval back to Cursor promptly. The gate no longer waits for a phone answer that Updates never asks for, and it withdraws the phone question before Cursor decides. An answer that arrives in that moment still counts.
 - A file change that goes back to the agent's own permissions is refused with the reason, because Cursor file hooks cannot show a local approval. Choose Every time for file changes you want to approve from your phone.
 - With no phone or other notification channel connected, a file change is refused with a message that says so. Shell commands and MCP calls still open Cursor's own prompt with "No device connected, approve here."
