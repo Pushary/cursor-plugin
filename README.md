@@ -35,7 +35,7 @@ Open the Marketplace panel in Cursor, search for Pushary, and click install. The
 This also sets up Claude Code, Codex, and Hermes if you use them.
 
 ```bash
-npx @pushary/agent-hooks@latest setup
+npx pushary@latest setup
 ```
 
 ### Option 3: Manual MCP
@@ -94,7 +94,7 @@ Timeout approvals apply only after the configured wait actually elapsed. Short e
 
 ## Development
 
-`skills/pushary/SKILL.md` mirrors the Pushary skill that ships with `@pushary/agent-hooks`. Keep the two the same.
+`skills/pushary/SKILL.md` mirrors the Pushary skill that ships with the Pushary CLI (`pushary` on npm). Keep the two the same.
 
 Test the plugin locally before publishing:
 
