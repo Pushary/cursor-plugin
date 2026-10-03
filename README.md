@@ -26,11 +26,7 @@ There are three things.
 
 You need two things: the plugin, and an API key.
 
-### Option 1: Cursor Marketplace (recommended)
-
-Open the Marketplace panel in Cursor, search for Pushary, and click install. Then set your API key (see below).
-
-### Option 2: CLI
+### Option 1: CLI (recommended)
 
 This also sets up Claude Code, Codex, and Hermes if you use them.
 
@@ -38,7 +34,7 @@ This also sets up Claude Code, Codex, and Hermes if you use them.
 npx pushary@latest setup
 ```
 
-### Option 3: Manual MCP
+### Option 2: Manual MCP
 
 Add this to `.cursor/mcp.json` in your project, or `~/.cursor/mcp.json` for every project:
 
@@ -106,7 +102,7 @@ Then reload Cursor with Developer: Reload Window.
 
 ## Security
 
-This repository has no secrets. Your key is read at runtime from `PUSHARY_API_KEY`. The gate script has no dependencies and only talks to pushary.com. Read `scripts/pushary-gate.mjs` to see exactly what it sends. See `SECURITY.md` for details.
+Your key is read at runtime from `PUSHARY_API_KEY`. The gate script has no dependencies. It sends approval and activity data to pushary.com by default; `PUSHARY_BASE_URL` can change that endpoint. Read `scripts/pushary-gate.mjs` to see exactly what it sends. See `SECURITY.md` for details.
 
 ## License
 
