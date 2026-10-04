@@ -35,6 +35,10 @@ const unresolved = (verdict) => genericToolHook && verdict?.reason === 'not_gate
   ? ALLOW
   : ask(genericToolHook ? 'Pushary could not reach a verdict for this change. Retry shortly.' : undefined)
 
+const approvalModeWithoutLocalPrompt = (mode) => mode === 'push_first' ? 'push_only' : mode
+const deliveryModeForThisHook = (mode) => genericToolHook ? approvalModeWithoutLocalPrompt(mode) : mode
+const localSurfaceHint = () => genericToolHook ? { localSurfaceAvailable: false } : {}
+
 let activeQuestion
 let done = false
 const respond = (decision) => {
@@ -377,6 +381,7 @@ const askArgs = (request, project, ident) => ({
   ...(request.scopePath ? { scopePath: request.scopePath } : {}),
   ...(request.scopeReason ? { blocker: request.scopeReason } : {}),
   actionBody: deriveActionBody(request.display),
+  ...localSurfaceHint(),
   wait: false,
   waitEndsAt: new Date(Date.now() + MAX_BLOCK_MS).toISOString(),
 })
@@ -694,7 +699,7 @@ setTimeout(async () => {
     Object.assign(request, scopeFromVerdict(verdict))
     const tool = verdict.policy
 
-    switch (tool.mode) {
+    switch (deliveryModeForThisHook(tool.mode)) {
       case 'terminal_only':
         return respond(handBack())
       case 'notify_only':
@@ -713,7 +718,7 @@ setTimeout(async () => {
 
 // Exported for scripts/pushary-gate.test.mjs. main() only runs when the gate is
 // executed directly, so importing this file for a test does not read stdin.
-export { normalizeRepoRemote, deriveRepoKey, describeRequest, handlePushOnly, handlePushFirst, withdraw }
+export { normalizeRepoRemote, deriveRepoKey, describeRequest, handlePushOnly, handlePushFirst, withdraw, approvalModeWithoutLocalPrompt }
 
 const isDirectRun = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 if (!isDirectRun) {
