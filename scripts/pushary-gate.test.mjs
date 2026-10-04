@@ -14,7 +14,7 @@
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { describeRequest, normalizeRepoRemote, redactSecrets } from './pushary-gate.mjs'
+import { describeRequest, normalizeRepoRemote, redactSecrets, timeoutActionWithoutLocalPrompt } from './pushary-gate.mjs'
 
 describe('repo identity', () => {
   it('collapses the forms of one remote', () => {
@@ -133,5 +133,18 @@ describe('approval text redaction', () => {
     assert.equal(redactSecrets('TOKEN=abc;rm file'), 'TOKEN=[redacted];rm file')
     assert.equal(redactSecrets('rm -rf {password=x,/}'), 'rm -rf {password=[redacted],/}')
     assert.equal(redactSecrets('export API_KEY="abc123" && rm -rf build'), 'export API_KEY="[redacted]" && rm -rf build')
+  })
+})
+
+describe('a rule that approves on timeout, for a file hook with no prompt of its own', () => {
+  it('approves only under Every time, and is refused under When I am out', () => {
+    assert.equal(timeoutActionWithoutLocalPrompt({ mode: 'push_only', timeoutAction: 'approve' }), 'approve')
+    assert.equal(timeoutActionWithoutLocalPrompt({ mode: 'push_first', timeoutAction: 'approve' }), 'deny')
+  })
+
+  it('leaves every other timeout action as the rule wrote it', () => {
+    for (const timeoutAction of ['deny', 'escalate', 'wait']) {
+      assert.equal(timeoutActionWithoutLocalPrompt({ mode: 'push_first', timeoutAction }), timeoutAction)
+    }
   })
 })

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.6
+
+- Under When I'm out, a file change nobody answers is refused, even when your rule approves on timeout. Cursor's file hooks have no prompt of their own, so the change used to run once the wait ended. Under Every time a rule that approves on timeout still runs the change, as before.
+
 ## 0.2.5
 
 - Under When I'm out, a file change asks your phone every time, also while you are at the keyboard, and waits for your policy's timeout. Cursor's file hooks cannot show a prompt of their own. Before, the change was refused with "Switch to Every time" and nobody was asked, or it was refused after the 10 second push window when you were away. Shell commands and MCP calls keep When I'm out as it was, because Cursor prompts for those itself.
