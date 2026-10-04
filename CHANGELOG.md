@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5
+
+- Under When I'm out, a file change asks your phone every time, also while you are at the keyboard, and waits for your policy's timeout. Cursor's file hooks cannot show a prompt of their own. Before, the change was refused with "Switch to Every time" and nobody was asked, or it was refused after the 10 second push window when you were away. Shell commands and MCP calls keep When I'm out as it was, because Cursor prompts for those itself.
+- The bundled Pushary skill says When I'm out waits 10 seconds for your phone by default, not 45.
+
 ## 0.2.4
 
 - Stop the gated action when a question is missing after withdrawal, instead of treating it as a timeout that can approve the action.
