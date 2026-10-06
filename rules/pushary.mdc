@@ -16,7 +16,7 @@ When Pushary is connected, it is your channel for reaching the user. Any time yo
 - A name, a path, a value, or other free text. Use type "input".
 - Approval of a plan or an approach before you start. Use type "select" with the options the user is choosing between, or "confirm" to approve a single plan.
 
-`ask_user` blocks and returns `{ answered, value, nextAction, handoffAction }`. Always set `context` to one line on what you are doing, and set `agentName` to "Cursor - {project}". If `answered` is false, follow `handoffAction` when present, otherwise `nextAction`: poll once when instructed, then cancel a live phone question before asking in the current chat. Never assume approval.
+`ask_user` blocks and returns `{ answered, value, nextAction, handoffAction }`. Always set `context` to one line on what you are doing, and set `agentName` to "Cursor - {project}". If `answered` is false, follow `handoffAction` when present, otherwise `nextAction`: keep waiting with the same correlationId while pending. Cancel only for an explicit handoff or when the answer is no longer needed. Never assume approval.
 
 If the user answers in the chat before the push comes back, call `cancel_question` with the correlationId before acting. If cancellation returns `handoffAction: "stop"`, stop. Otherwise, if cancellation returns false, poll once for 1 second and honor any phone answer that won the race.
 
