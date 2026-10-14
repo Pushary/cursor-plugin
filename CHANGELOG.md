@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.8
+
+- Hidden from Grok Bot. This plugin needs an API key and command hooks on your own computer, which a Bot's cloud computer does not have. Grok Bot users install [Pushary for Grok Bot](https://github.com/Pushary/grok-bot-plugin) instead.
+
 ## 0.2.6
 
 - Under When I'm out, a file change nobody answers is refused, even when your rule approves on timeout. Cursor's file hooks have no prompt of their own, so the change used to run once the wait ended. Under Every time a rule that approves on timeout still runs the change, as before.
