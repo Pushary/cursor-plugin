@@ -57,7 +57,7 @@ The plugin and CLI installer use the same decision service. Manual MCP-only conf
 The plugin reads your key from the `PUSHARY_API_KEY` environment variable. Get a key at https://pushary.com, then add it to your shell profile:
 
 ```bash
-echo 'export PUSHARY_API_KEY="pk_xxx.sk_xxx"' >> ~/.zshrc
+echo 'export PUSHARY_API_KEY="pk_xxx.xxx"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
