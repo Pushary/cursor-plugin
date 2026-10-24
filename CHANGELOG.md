@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9
+
+- The always-on rule no longer sends every question to your phone or asks you to approve a plan for work you already asked for. It asks in the chat when you are there and through `ask_user` when you are away.
+- The bundled Pushary skill asks each question once, on one channel: in the chat when you are there, through `ask_user` when you are away. It no longer sends a question inside a notification.
+- A reversible choice the agent would make anyway, inside the task, is made and listed in its final message instead of asked. An irreversible step, spending money or a decision outside its authority still gets a question.
+- A question that closes unanswered is never approval: the agent does not take the step and asks you in the chat instead.
+- Notification bodies are kept under 180 characters, where the phone cuts them.
+
 ## 0.2.8
 
 - Hidden from Grok Bot. This plugin needs an API key and command hooks on your own computer, which a Bot's cloud computer does not have. Grok Bot users install [Pushary for Grok Bot](https://github.com/Pushary/grok-bot-plugin) instead.

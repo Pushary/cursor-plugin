@@ -9,12 +9,13 @@ Pushary is connected as an MCP server. It reaches the user on their phone, so us
 
 ## Ask the user through Pushary
 
-When Pushary is connected, it is your channel for reaching the user. Any time you would stop and ask the user something, ask it through the `ask_user` tool and wait for the answer, instead of only asking in the chat. This covers all of your questions:
+Ask once, on one channel. If the user just wrote to you in this chat and has not said they are leaving, ask there in plain text and wait. Otherwise ask through the `ask_user` tool and wait for the answer:
 
 - Yes or no. Use type "confirm".
-- Multiple choice. Use type "select" with 2 to 6 options.
+- Multiple choice. Use type "select" with 2 to 6 options, your recommendation first.
 - A name, a path, a value, or other free text. Use type "input".
-- Approval of a plan or an approach before you start. Use type "select" with the options the user is choosing between, or "confirm" to approve a single plan.
+
+Do not ask to approve a plan or an approach for work the user already asked for. If you would take your default without asking at all, and it is reversible, spends nothing and stays inside the task, take it and list it in your final message. An irreversible step, a deploy, spending money, or a decision outside your authority still needs a question unless the user already approved it. The risky shell commands below are already gated for you.
 
 `ask_user` blocks and returns `{ answered, value, nextAction, handoffAction }`. Always set `context` to one line on what you are doing, and set `agentName` to "Cursor - {project}". If `answered` is false, follow `handoffAction` when present, otherwise `nextAction`: keep waiting with the same correlationId while pending. Cancel only for an explicit handoff or when the answer is no longer needed. Never assume approval.
 
@@ -34,7 +35,7 @@ Risky shell commands (rm, force push, history rewrites, database drops, deploys,
 
 ## Keep it tidy
 
-- Keep titles under 60 characters and bodies under 200. Put detail in the `context` object, not the title.
+- Keep titles under 60 characters and bodies under 180. Put detail in the `context` object, not the title.
 - Send at most 3 notifications per task unless the user asks for more.
 
 For the full tool reference, with every parameter, examples, and return values, see the pushary skill.
