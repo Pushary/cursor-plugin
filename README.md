@@ -83,6 +83,15 @@ The hooks register the supported execution boundaries; your dashboard policy dec
 
 Timeout approvals apply only after the configured wait actually elapsed. Short editor hook budgets can end a wait earlier; cancellation is attempted before handoff. An uncertain cancellation denies the action. Local plugin installation does not install hooks into remote or cloud agent environments.
 
+## For teams
+
+On [Pushary for Teams](https://pushary.com/teams?utm_source=github&utm_medium=oss-adapter&utm_campaign=cursor-plugin&utm_content=readme-teams), each person installs the plugin and connects their own Cursor. Their agent's questions go to them. An owner or admin can send a chosen step to someone else with a routing rule in **Policies**, under **Approval routing**, such as `Bash(git push:*)` in the `infra` repository, routed to the Admins role. Cursor's shell commands match `Bash(...)` rules, so the same rule also covers teammates on Claude Code, Codex or Gemini CLI. Whoever answers in the phone app, Mac app or dashboard is recorded by name.
+
+- Cursor gives a hook about 60 seconds, so a lead has to answer within that. If nobody does, the step goes back to Cursor, and a yes given there isn't recorded.
+- The phone can only deny risky steps such as a force push or `rm -r`. Approve those in the dashboard.
+
+Team is $59 a month for 5 people, plus $12 for each extra person.
+
 ## Commands
 
 - `/pushary-test` sends a test push so you can confirm delivery.
