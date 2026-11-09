@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.11
+
+- The gate runs on Windows and from a plugin folder whose path has a space or a symlink. Before, it printed nothing there, so Cursor blocked every shell command, MCP call and file edit the gate covers.
+
 ## 0.2.10
 
 - The bundled Pushary skill is 0.13.1. It gives the next step for each `status --json` exit code, lists every agent id setup accepts, and keeps the Mac app in charge of the agents it connected.

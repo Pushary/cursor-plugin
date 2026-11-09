@@ -6,9 +6,9 @@ import { redactSecrets, redactSecretsDeep } from './redaction.mjs'
 export { redactSecrets } from './redaction.mjs'
 import { createHash, randomUUID } from 'node:crypto'
 import { homedir, hostname } from 'node:os'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, posix, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const BASE_URL = process.env.PUSHARY_BASE_URL?.trim() || 'https://pushary.com'
 const MCP_URL = `${BASE_URL}/api/mcp/mcp`
@@ -758,10 +758,18 @@ setTimeout(async () => {
 // executed directly, so importing this file for a test does not read stdin.
 export { normalizeRepoRemote, deriveRepoKey, repositoryScopeFor, describeRequest, handlePushOnly, handlePushFirst, withdraw, approvalModeWithoutLocalPrompt, timeoutActionWithoutLocalPrompt }
 
-const isDirectRun = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
-if (!isDirectRun) {
-  // imported for tests
-} else main().catch((error) => {
+const isThisFile = (path) => pathToFileURL(path).href === import.meta.url
+
+const ranAsTheScript = (scriptPath) => {
+  if (!scriptPath) return false
+  try {
+    return isThisFile(scriptPath) || isThisFile(realpathSync(scriptPath))
+  } catch {
+    return false
+  }
+}
+
+if (ranAsTheScript(process.argv[1])) main().catch((error) => {
   process.stderr.write(`[pushary-gate] fatal: ${error?.message ?? error}\n`)
   respond(ask())
 })
