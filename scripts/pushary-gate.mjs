@@ -5,7 +5,7 @@
 import { redactSecrets, redactSecretsDeep } from './redaction.mjs'
 export { redactSecrets } from './redaction.mjs'
 import { createHash, randomUUID } from 'node:crypto'
-import { hostname } from 'node:os'
+import { homedir, hostname } from 'node:os'
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, posix, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -72,7 +72,18 @@ const readStdin = async () => {
   return raw
 }
 
-const getMachineId = () => createHash('sha256').update(hostname()).digest('hex').slice(0, 8)
+const MACHINE_ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+const readSharedMachineId = () => {
+  try {
+    const value = readFileSync(join(homedir(), '.pushary', 'machine-id'), 'utf-8').trim()
+    return MACHINE_ID_UUID.test(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+export const getMachineId = () => readSharedMachineId() ?? createHash('sha256').update(hostname()).digest('hex').slice(0, 8)
 
 // ── Repository identity (ported from packages/agent-hooks/src/repo.ts) ───────
 // A rule can be scoped to one repository, so the gate has to know which one it
