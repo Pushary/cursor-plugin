@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.12
+
+- The bundled Pushary skill is 0.13.4, from 0.13.2. When you ask the agent to call, phone or ring you if it gets stuck, it asks with `ask_user`. Pushary phones only when the reply includes `phoneCall`, and the agent does not promise a call otherwise. It tells you when the call rings in your own time (`ringsAtLocal`), not the UTC `ringsAt`. While the question is pending it keeps waiting with the same `correlationId`, so a spoken answer arrives like any other.
+- A computer whose key works but has no phone connected pairs one with `npx pushary@latest pair`, which keeps this computer's key. The agent runs it in the background and shows you the link, the QR code and the fingerprint while it waits up to 15 minutes for your phone. The skill used to send it to setup with `--connect app`, which makes a new key.
+- The skill's description is shorter and names "call me if you get stuck" among its triggers.
+- The gate's redaction also hides the credential after `Authorization: Basic`, `Token`, `Negotiate` or `NTLM`, not only the scheme word, so a command that carries one shows `authorization: [redacted]`.
+
 ## 0.2.11
 
 - The gate runs on Windows and from a plugin folder whose path has a space or a symlink. Before, it printed nothing there, so Cursor blocked every shell command, MCP call and file edit the gate covers.
