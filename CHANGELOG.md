@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.13
+
+- When Pushary already has as many open questions in the session as it allows, the gate asks once instead of three times. A shell command or MCP call then goes to Cursor's own prompt, and the agent is told why ("Pushary has too many open questions in this session, so this was not sent to the phone. Approve it here."). A file edit, which has no prompt of its own, or a call under a rule that refuses when nobody answers, is refused, and the agent is told it did not run. Before, the gate asked three times and refused every call with "Pushary could not create a verifiable approval".
+
 ## 0.2.12
 
 - The bundled Pushary skill is 0.13.4, from 0.13.2. When you ask the agent to call, phone or ring you if it gets stuck, it asks with `ask_user`. Pushary phones only when the reply includes `phoneCall`, and the agent does not promise a call otherwise. It tells you when the call rings in your own time (`ringsAtLocal`), not the UTC `ringsAt`. While the question is pending it keeps waiting with the same `correlationId`, so a spoken answer arrives like any other.
