@@ -200,16 +200,19 @@ const repositoryScopeFor = (cwd) => {
 }
 
 
+const KEY_SHAPE = /^pk_[a-z0-9]+\.[a-z0-9]+$/i
+const isPusharyKeyShaped = (value) => typeof value === 'string' && KEY_SHAPE.test(value)
+
 // Env first. CLI installs inject the key into the sibling mcp.json, so fall back to
 // that. This lets the gate work even when Cursor's GUI does not pass the shell env.
 const resolveApiKey = () => {
-  const fromEnv = process.env.PUSHARY_API_KEY
-  if (fromEnv) return fromEnv
+  const fromEnv = process.env.PUSHARY_API_KEY?.trim()
+  if (isPusharyKeyShaped(fromEnv)) return fromEnv
   try {
     const mcpPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'mcp.json')
     const auth = JSON.parse(readFileSync(mcpPath, 'utf-8'))?.mcpServers?.pushary?.headers?.Authorization ?? ''
     const key = auth.replace(/^Bearer\s+/i, '').trim()
-    if (/^pk_[a-z0-9]+\.[a-z0-9]+$/i.test(key)) return key
+    if (isPusharyKeyShaped(key)) return key
   } catch {}
   return undefined
 }
