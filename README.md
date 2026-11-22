@@ -4,7 +4,7 @@
 
 <h1 align="center">Pushary for Cursor</h1>
 
-<p align="center">A control panel for your AI coding agent. Get a push when work finishes, answer the agent from your phone, and approve risky commands before they run.</p>
+<p align="center">A control panel for your AI agent in Cursor. Get a push when work finishes, answer the agent from your phone, and approve risky commands before they run.</p>
 
 ---
 
@@ -21,6 +21,27 @@ There are three things.
 2. Ask. The agent asks you questions through push: yes or no, multiple choice, or free text. It waits for your answer. The bundled instructions guide the agent to use Pushary for questions. Native editor question dialogs are not automatically intercepted.
 
 3. Gate. Shell commands, file writes/edits/deletes, and third-party MCP calls reach your Pushary policy before execution. The policy can approve, deny, or wait for your answer. Cancelled or unverifiable decisions stop the action. Cursor’s generic file-tool hook does not enforce `ask`, so an unresolved file action is denied. File actions explicitly marked `not_gated` by the server proceed; shell/MCP hooks can hand off to Cursor’s prompt.
+
+## What you get after you sign in
+
+1. Sign in and pick a plan. New customers start with a 3-day trial.
+2. Run `npx -y pushary@latest setup` once. It installs this plugin, links your key and registers the approval gate in Cursor.
+3. When the Cursor agent needs a yes or an answer, the question arrives on your phone (the Pushary app for iOS and Android), on your Mac, or in the dashboard.
+4. You answer with one tap, or type a short reply, and the agent keeps going. The dashboard keeps a record of what each agent asked and what you answered.
+
+Read the [Cursor guide](https://pushary.com/docs/agents/guides/cursor?utm_source=github&utm_medium=oss-adapter&utm_campaign=cursor-plugin&utm_content=readme) for each step, or see [Cursor notifications on your phone](https://pushary.com/cursor-notifications?utm_source=github&utm_medium=oss-adapter&utm_campaign=cursor-plugin&utm_content=readme).
+
+## Plans
+
+Each plan starts with a 3-day trial for new customers. During the trial, Agent, Agent Pro and Team include 5 call minutes.
+
+| Plan | Price | What you get |
+| --- | --- | --- |
+| [Agent](https://pushary.com/pricing?utm_source=github&utm_medium=oss-adapter&utm_campaign=cursor-plugin&utm_content=readme) | $9.99 a month | One person and every AI agent they run. Approve, deny or answer from your phone or Mac. 10 call minutes a month. |
+| [Agent Pro](https://pushary.com/pricing?utm_source=github&utm_medium=oss-adapter&utm_campaign=cursor-plugin&utm_content=readme) | $19.99 a month | Everything in Agent, plus unlimited notifications, budgets and priority support. 20 call minutes a month. |
+| [Team](https://pushary.com/teams?utm_source=github&utm_medium=oss-adapter&utm_campaign=cursor-plugin&utm_content=readme) | $59 a month for 5 people, $12 for each extra person | A shared record of what your team's agents asked and who answered, with export. 60 call minutes a month. |
+
+Missed the push? On those plans Pushary can call you, by default a minute or two after the push, and read the request. Calls do not cover Cursor yet. They work for Claude Code, Codex, Gemini CLI and the other agents listed under [Phone calls](https://pushary.com/calls?utm_source=github&utm_medium=oss-adapter&utm_campaign=cursor-plugin&utm_content=readme). [How calls work](https://pushary.com/docs/agents/phone-calls?utm_source=github&utm_medium=oss-adapter&utm_campaign=cursor-plugin&utm_content=readme)
 
 ## Install
 
@@ -54,14 +75,14 @@ The plugin and CLI installer use the same decision service. Manual MCP-only conf
 
 ## Set your API key
 
-The plugin reads your key from the `PUSHARY_API_KEY` environment variable. Get a key at https://pushary.com, then add it to your shell profile:
+The plugin reads your key from the `PUSHARY_API_KEY` environment variable. Create a key in the dashboard under [Agent settings](https://pushary.com/dashboard/agent/settings), then add it to your shell profile:
 
 ```bash
 echo 'export PUSHARY_API_KEY="pk_xxx.xxx"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-Install the Pushary app on your phone (or turn on web push) so the agent can reach you.
+Install the Pushary app on your phone (or turn on browser notifications) so the agent can reach you.
 
 ## Troubleshooting
 
@@ -108,6 +129,12 @@ ln -s "$(pwd)" ~/.cursor/plugins/local/pushary
 ```
 
 Then reload Cursor with Developer: Reload Window.
+
+## Related repositories
+
+- [Pushary for VS Code](https://github.com/Pushary/vscode-plugin): the same gate for the VS Code agent.
+- [Pushary skill](https://github.com/Pushary/pushary-skill): the skill and setup for Claude Code, Codex, Gemini CLI and more.
+- [Pushary for Mac](https://github.com/Pushary/pushary-mac): answer from the notch on your Mac.
 
 ## Security
 
