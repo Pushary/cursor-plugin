@@ -31,7 +31,7 @@ You need two things: the plugin, and an API key.
 This also sets up Claude Code, Codex, and Hermes if you use them.
 
 ```bash
-npx pushary@latest setup
+npx -y pushary@latest setup
 ```
 
 ### Option 2: Manual MCP

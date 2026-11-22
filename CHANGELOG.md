@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.17
+
+- `pushary` skill 0.13.7, from 0.13.6: every Pushary command it gives is written `npx -y pushary@latest …`, and `npx.cmd -y pushary@latest …` in PowerShell, so npm installs the CLI without stopping to ask "Ok to proceed? (y)".
+
 ## 0.2.16
 
 - The gate no longer sends a `PUSHARY_API_KEY` that is not a Pushary key. A Pushary key is `pk_`, letters and digits, a dot, and more letters and digits. Any other value is ignored, as if `PUSHARY_API_KEY` were not set: the gate uses the key `pushary setup` wrote into the plugin's `mcp.json`, and with no key there it answers as it does when Pushary is not configured ("Pushary is not configured: ...") and makes no request, for approvals and for the session events it reports. A valid `PUSHARY_API_KEY` still wins over the key in `mcp.json`.
