@@ -200,7 +200,7 @@ const repositoryScopeFor = (cwd) => {
 }
 
 
-const KEY_SHAPE = /^pk_[a-z0-9]+\.[a-z0-9]+$/i
+const KEY_SHAPE = /^pk_[a-f0-9]+\.[a-f0-9]+$/
 const isPusharyKeyShaped = (value) => typeof value === 'string' && KEY_SHAPE.test(value)
 
 // Env first. CLI installs inject the key into the sibling mcp.json, so fall back to
